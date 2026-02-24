@@ -188,3 +188,53 @@ export function render(tree: JsxAiNode): ExtractedPrompt {
 export function registerStrategy(name: string, strategy: RenderStrategy): void {
     STRATEGIES[name] = strategy
 }
+
+/**
+ * Simple text-in/text-out LLM call — no JSX needed.
+ * Uses the provider system for routing and auth.
+ *
+ * ```ts
+ * const text = await callText("gemini-2.5-flash", [
+ *   { role: "system", content: "You are a planner" },
+ *   { role: "user", content: "Break this task into steps" },
+ * ])
+ * ```
+ */
+export async function callText(
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    options?: { temperature?: number; maxTokens?: number; apiKey?: string },
+): Promise<string> {
+    const provider = resolveProvider(model, undefined)
+    const apiKey = resolveApiKey(provider, options)
+
+    const system = messages.find(m => m.role === "system")?.content || ""
+    const nonSystem = messages.filter(m => m.role !== "system")
+
+    const prepared = {
+        system,
+        messages: nonSystem.map(m => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+        })),
+        temperature: options?.temperature ?? 0.3,
+        maxTokens: options?.maxTokens ?? 8000,
+    }
+
+    const { url, headers, body } = provider.buildRequest(prepared, model, apiKey)
+
+    const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+    })
+
+    if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(`LLM API error ${res.status}: ${errText.substring(0, 500)}`)
+    }
+
+    const data = await res.json()
+    const result = provider.parseResponse(data)
+    return result.text
+}

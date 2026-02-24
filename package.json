@@ -25,6 +25,11 @@
         "anthropic"
     ],
     "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/7flash/jsx-ai"
+    },
+    "author": "7flash",
     "dependencies": {
         "measure-fn": "^3.7.0"
     },

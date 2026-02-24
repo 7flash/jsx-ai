@@ -15,7 +15,7 @@
 //     { model: "gemini-2.5-flash" }
 //   )
 
-export { callLLM, render, registerStrategy, registerProvider } from "./llm"
+export { callLLM, callText, render, registerStrategy, registerProvider } from "./llm"
 export type { CallOptions } from "./llm"
 export type {
     JsxAiNode,
