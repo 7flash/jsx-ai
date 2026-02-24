@@ -1,13 +1,24 @@
 // ── callLLM — the main entry point ──
-// Accepts a JSX tree and calls the LLM using the optimal strategy
+//
+// Architecture:
+//   Strategy (provider-agnostic)  →  Provider (Gemini/OpenAI)  →  HTTP
+//
+//   1. strategy.prepare(prompt) → PreparedPrompt  (no API specifics)
+//   2. provider converts PreparedPrompt → API body  (Gemini format)
+//   3. provider parses API response → LLMResponse
+//   4. strategy.parseToolCalls(text) for text-based strategies
+//
+// Strategies never touch API bodies. Providers never touch tool formatting.
 
-import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt } from "./types"
+import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "./types"
 import { extract } from "./render"
 import { native } from "./strategies/native"
 import { xml } from "./strategies/xml"
 import { natural } from "./strategies/natural"
 import { hybrid } from "./strategies/hybrid"
 import { nlt } from "./strategies/nlt"
+
+export type { LLMResponse }
 
 export interface CallOptions {
     /** API key (defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var) */
@@ -27,15 +38,7 @@ const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybri
 /** Resolve which strategy to use */
 function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStrategy {
     const choice = override || prompt.strategy || "auto"
-
-    if (choice === "xml") return xml
-    if (choice === "native") return native
-    if (choice === "natural") return natural
-    if (choice === "hybrid") return hybrid
-    if (choice === "nlt") return nlt
-
-    // auto — use hybrid (best overall per benchmarks)
-    return hybrid
+    return STRATEGIES[choice] || hybrid
 }
 
 /** Resolve API key from options, env, or config file */
@@ -55,6 +58,87 @@ function resolveApiKey(options?: CallOptions): string {
 
     throw new Error("No API key found. Set GEMINI_API_KEY, pass apiKey option, or add .config.toml")
 }
+
+
+// ═══════════════════════════════════════════════════════════════════
+//   GEMINI PROVIDER
+//   Converts PreparedPrompt ↔ Gemini API format
+// ═══════════════════════════════════════════════════════════════════
+
+function geminiEndpoint(model: string): string {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+}
+
+function geminiHeaders(apiKey: string): Record<string, string> {
+    return {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+    }
+}
+
+/** Convert a PreparedPrompt into Gemini's API body format */
+function toGeminiBody(prepared: PreparedPrompt): any {
+    const body: any = {
+        contents: prepared.messages.map(m => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+        })),
+        generationConfig: {
+            temperature: prepared.temperature ?? 0.1,
+            maxOutputTokens: prepared.maxTokens ?? 4000,
+        },
+    }
+
+    if (prepared.system) {
+        body.systemInstruction = { parts: [{ text: prepared.system }] }
+    }
+
+    if (prepared.nativeTools && prepared.nativeTools.length > 0) {
+        body.tools = [{
+            functionDeclarations: prepared.nativeTools.map(t => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+            })),
+        }]
+        body.toolConfig = { functionCallingConfig: { mode: "AUTO" } }
+    }
+
+    return body
+}
+
+/** Extract text and native tool calls from a Gemini API response */
+function parseGeminiResponse(data: any): { text: string; nativeToolCalls: ToolCall[] } {
+    const parts = data.candidates?.[0]?.content?.parts || []
+    let text = ""
+    const nativeToolCalls: ToolCall[] = []
+
+    for (const part of parts) {
+        if (part.text) text += part.text
+        if (part.functionCall) {
+            nativeToolCalls.push({
+                name: part.functionCall.name,
+                args: part.functionCall.args || {},
+            })
+        }
+    }
+
+    return { text, nativeToolCalls }
+}
+
+/** Extract usage metadata from a Gemini response */
+function parseGeminiUsage(data: any): LLMResponse["usage"] {
+    const usage = data.usageMetadata
+    return usage ? {
+        inputTokens: usage.promptTokenCount || 0,
+        outputTokens: usage.candidatesTokenCount || 0,
+    } : undefined
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//   PUBLIC API
+// ═══════════════════════════════════════════════════════════════════
 
 /**
  * Call an LLM with a JSX-defined prompt.
@@ -83,14 +167,16 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     if (options?.temperature != null) prompt.temperature = options.temperature
     if (options?.maxTokens != null) prompt.maxTokens = options.maxTokens
 
-    // 3. Resolve strategy
+    // 3. Strategy transforms the prompt (provider-agnostic)
     const strategy = resolveStrategy(prompt, options?.strategy)
+    const prepared = strategy.prepare(prompt)
 
-    // 4. Resolve API key
+    // 4. Provider converts to API format and sends request
     const apiKey = resolveApiKey(options)
-
-    // 5. Build and send request
-    const { url, body, headers } = strategy.buildRequest(prompt, apiKey)
+    const model = prompt.model || "gemini-2.5-flash"
+    const url = geminiEndpoint(model)
+    const headers = geminiHeaders(apiKey)
+    const body = toGeminiBody(prepared)
 
     const res = await fetch(url, {
         method: "POST",
@@ -105,10 +191,21 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
 
     const data = await res.json()
 
-    // 6. Parse response and attach request for observability
-    const result = strategy.parseResponse(data)
-    result.request = { url, body }
-    return result
+    // 5. Provider parses response
+    const { text, nativeToolCalls } = parseGeminiResponse(data)
+
+    // 6. Tool calls: use native FC if available, otherwise strategy parses from text
+    const toolCalls = nativeToolCalls.length > 0
+        ? nativeToolCalls
+        : (strategy.parseToolCalls?.(text) ?? [])
+
+    return {
+        text,
+        toolCalls,
+        raw: data,
+        request: { url, body },
+        usage: parseGeminiUsage(data),
+    }
 }
 
 /**

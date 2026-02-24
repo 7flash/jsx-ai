@@ -28,6 +28,7 @@ export type {
     ExtractedTool,
     ExtractedMessage,
     ExtractedPrompt,
+    PreparedPrompt,
     ToolCall,
     LLMResponse,
     RenderStrategy,

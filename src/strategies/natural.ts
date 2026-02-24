@@ -3,17 +3,13 @@
 // No XML tags, no structured JSON — just clear natural language instructions.
 // The model responds in natural language with a specific pattern we parse.
 
-import type { RenderStrategy, ExtractedPrompt, LLMResponse } from "../types"
-
-function resolveGeminiEndpoint(model: string): string {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-}
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "../types"
 
 /** Convert tools into natural language instructions */
-function toolsToNaturalLanguage(prompt: ExtractedPrompt): string {
-    if (prompt.tools.length === 0) return ""
+function toolsToNaturalLanguage(tools: ExtractedPrompt["tools"]): string {
+    if (tools.length === 0) return ""
 
-    const toolDescriptions = prompt.tools.map(t => {
+    const toolDescriptions = tools.map(t => {
         const params = Object.entries(t.parameters.properties)
             .map(([name, p]) => {
                 const req = t.parameters.required.includes(name) ? "" : " (optional)"
@@ -40,89 +36,46 @@ You can make multiple tool calls in one response. Each one should follow the TOO
 If you don't need any tools, just respond with THINKING and your message.`
 }
 
-/** Parse natural language tool calls from the model's response */
-function parseNaturalLanguageResponse(text: string): LLMResponse["toolCalls"] {
-    const calls: LLMResponse["toolCalls"] = []
-
-    // Match TOOL_CALL blocks
-    const callRegex = /TOOL_CALL:\s*(\S+)\s*\n([\s\S]*?)END_CALL/g
-    let match
-    while ((match = callRegex.exec(text)) !== null) {
-        const name = match[1].trim()
-        const body = match[2]
-        const args: Record<string, any> = {}
-
-        // Parse PARAM lines
-        const paramRegex = /PARAM\s+(\w+):\s*([\s\S]*?)(?=\nPARAM\s|\nEND_CALL|$)/g
-        let pm
-        while ((pm = paramRegex.exec(body)) !== null) {
-            args[pm[1].trim()] = pm[2].trim()
-        }
-
-        calls.push({ name, args })
-    }
-
-    return calls
-}
-
 export const natural: RenderStrategy = {
     name: "natural",
 
-    buildRequest(prompt: ExtractedPrompt, apiKey: string) {
-        const model = prompt.model || "gemini-2.5-flash"
-
+    prepare(prompt: ExtractedPrompt): PreparedPrompt {
+        // Tools are embedded in the system prompt as natural language
         const systemParts: string[] = []
         if (prompt.system) systemParts.push(prompt.system)
-        systemParts.push(toolsToNaturalLanguage(prompt))
-
-        const contents = prompt.messages.map(m => ({
-            role: m.role === "assistant" ? "model" : "user",
-            parts: [{ text: m.content }],
-        }))
-
-        const body: any = {
-            contents,
-            generationConfig: {
-                temperature: prompt.temperature ?? 0.1,
-                maxOutputTokens: prompt.maxTokens ?? 4000,
-            },
-        }
-
-        if (systemParts.length > 0) {
-            body.systemInstruction = { parts: [{ text: systemParts.join("\n\n") }] }
-        }
+        systemParts.push(toolsToNaturalLanguage(prompt.tools))
 
         return {
-            url: resolveGeminiEndpoint(model),
-            body,
-            headers: {
-                "Content-Type": "application/json",
-                "x-goog-api-key": apiKey,
-            },
+            system: systemParts.join("\n\n"),
+            messages: prompt.messages.map(m => ({
+                role: m.role === "system" ? "user" as const : m.role as "user" | "assistant",
+                content: m.content,
+            })),
+            // No native tools — tools are in the system prompt text
+            temperature: prompt.temperature,
+            maxTokens: prompt.maxTokens,
         }
     },
 
-    parseResponse(data: any): LLMResponse {
-        // Concatenate ALL text parts (Gemini may split response across multiple parts)
-        const parts = data.candidates?.[0]?.content?.parts || []
-        const text = parts
-            .filter((p: any) => p.text)
-            .map((p: any) => p.text)
-            .join("\n")
+    parseToolCalls(text: string): ToolCall[] {
+        const calls: ToolCall[] = []
 
-        // Extract thinking section
-        const thinkMatch = text.match(/THINKING:\s*([\s\S]*?)(?=\nTOOL_CALL:|$)/)
-        const thinking = thinkMatch ? thinkMatch[1].trim() : text.split("TOOL_CALL:")[0].trim()
+        const callRegex = /TOOL_CALL:\s*(\S+)\s*\n([\s\S]*?)END_CALL/g
+        let match
+        while ((match = callRegex.exec(text)) !== null) {
+            const name = match[1].trim()
+            const body = match[2]
+            const args: Record<string, any> = {}
 
-        const usage = data.usageMetadata
-        return {
-            text: thinking,
-            toolCalls: parseNaturalLanguageResponse(text),
-            raw: data,
-            usage: usage ? {
-                inputTokens: usage.promptTokenCount || 0,
-                outputTokens: usage.candidatesTokenCount || 0,
-            } : undefined,
+            const paramRegex = /PARAM\s+(\w+):\s*([\s\S]*?)(?=\nPARAM\s|\nEND_CALL|$)/g
+            let pm
+            while ((pm = paramRegex.exec(body)) !== null) {
+                args[pm[1].trim()] = pm[2].trim()
+            }
+
+            calls.push({ name, args })
         }
+
+        return calls
     },
 }

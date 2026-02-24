@@ -26,7 +26,8 @@
 
 import { measure, configure } from "measure-fn"
 import { callLLM, md } from "../src/index"
-import type { LLMResponse, CallOptions } from "../src/llm"
+import type { LLMResponse } from "../src/types"
+import type { CallOptions } from "../src/llm"
 import { mkdirSync } from "fs"
 
 const MODEL = "gemini-2.5-flash"

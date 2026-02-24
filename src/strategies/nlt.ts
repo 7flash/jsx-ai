@@ -32,14 +32,10 @@
 //
 //   Assessment finished.
 
-import type { RenderStrategy, ExtractedPrompt, LLMResponse, ToolCall } from "../types"
-
-function resolveGeminiEndpoint(model: string): string {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-}
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "../types"
 
 /** Build NLT-style system prompt following the paper's 5-component template */
-function buildNLTPrompt(prompt: ExtractedPrompt): string {
+function buildNLTSystemPrompt(prompt: ExtractedPrompt): string {
     const parts: string[] = []
 
     // {NLT-role} — grounding context
@@ -121,11 +117,23 @@ function buildNLTPrompt(prompt: ExtractedPrompt): string {
  * Instead, for each YES block we use the KNOWN param names and split using
  * the tool boundary markers (next "toolname – YES/NO" or "Assessment finished.").
  */
-function parseNLTResponse(text: string, knownTools: string[]): ToolCall[] {
+function parseNLTToolCalls(text: string): ToolCall[] {
     const calls: ToolCall[] = []
 
+    // Detect tool names from the YES/NO pattern
+    const toolNameRegex = /^(\S+)\s*[–—:-]\s*(YES|NO)\b/gm
+    const detectedTools: string[] = []
+    let m
+    while ((m = toolNameRegex.exec(text)) !== null) {
+        if (!detectedTools.includes(m[1])) {
+            detectedTools.push(m[1])
+        }
+    }
+
     // Build boundary pattern: matches any "toolname – YES/NO" or "Assessment finished."
-    const toolMarkers = knownTools.map(escapeRegex)
+    const toolMarkers = detectedTools.map(escapeRegex)
+    if (toolMarkers.length === 0) return calls
+
     const boundaryPattern = `(?:(?:${toolMarkers.join("|")})\\s*[–—:-]\\s*(?:YES|NO)|Assessment\\s+finished)`
 
     // Find all YES blocks: "toolname – YES" + everything until next boundary
@@ -138,9 +146,7 @@ function parseNLTResponse(text: string, knownTools: string[]): ToolCall[] {
     while ((match = yesBlockRegex.exec(text)) !== null) {
         const toolName = match[1]
         const block = match[2]
-
-        // Find which tool definition this is (to get param names)
-        const args = parseBlockParams(block, toolName, knownTools)
+        const args = parseBlockParams(block)
         calls.push({ name: toolName, args })
     }
 
@@ -151,57 +157,40 @@ function parseNLTResponse(text: string, knownTools: string[]): ToolCall[] {
  * Parse parameter values from a YES block.
  *
  * For tools with a large text param (like "content"), we use a positional
- * approach: find the first param, then the last param, and everything
- * in between the last small param start and the block end is the large value.
- *
- * For simpler tools (like exec with just "command:"), we take everything
- * after the param name.
+ * approach: find params from the top, and for the LAST param treat everything
+ * until end-of-block as its value.
  */
-function parseBlockParams(block: string, _toolName: string, _knownTools: string[]): Record<string, any> {
+function parseBlockParams(block: string): Record<string, any> {
     const args: Record<string, any> = {}
     const lines = block.split("\n")
 
-    // Heuristic: scan from top for "param_name: value" lines
-    // A param line starts with a lowercase word followed by ":"
-    // But code also has lines like "port: 3000" — so we need to be smart
-
-    // Strategy: collect param candidates, then for the LAST param,
-    // treat everything after it until end-of-block as its value
+    // Collect param candidates
     const paramStarts: { key: string; valueStart: string; lineIndex: number }[] = []
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i]
-        // Match top-level param declarations: start of line, simple lowercase_name, colon, value
-        // Skip lines that are clearly code (indented, contain {}, etc.)
         const m = line.match(/^([a-z_]+):\s*(.*)/)
         if (m) {
-            // Check if this is the first line or follows immediately after a param
-            // vs deeply nested inside code content
             const key = m[1]
-            const rest = m[2]
 
-            // If we already have params and this line is deeply into the block,
-            // it's probably inside a multi-line value — skip it
+            // If the last param was a multi-line content param, stop looking
             if (paramStarts.length > 0) {
                 const lastParam = paramStarts[paramStarts.length - 1]
-                // If the last param was a "content" type param with multi-line value,
-                // stop looking for new params
                 if (lastParam.key === "content" || lastParam.key === "replace") {
                     continue
                 }
             }
 
-            paramStarts.push({ key, valueStart: rest, lineIndex: i })
+            paramStarts.push({ key, valueStart: m[2], lineIndex: i })
         }
     }
 
-    // Now extract values
+    // Extract values
     for (let i = 0; i < paramStarts.length; i++) {
         const param = paramStarts[i]
         const nextParam = paramStarts[i + 1]
 
         if (nextParam) {
-            // Value is everything from this param's value to the next param
             const valueLines = [param.valueStart]
             for (let j = param.lineIndex + 1; j < nextParam.lineIndex; j++) {
                 valueLines.push(lines[j])
@@ -227,65 +216,21 @@ function escapeRegex(s: string): string {
 export const nlt: RenderStrategy = {
     name: "nlt",
 
-    buildRequest(prompt: ExtractedPrompt, apiKey: string) {
-        const model = prompt.model || "gemini-2.5-flash"
-
-        const systemText = buildNLTPrompt(prompt)
-
-        const contents = prompt.messages.map(m => ({
-            role: m.role === "assistant" ? "model" : "user",
-            parts: [{ text: m.content }],
-        }))
-
-        const body: any = {
-            contents,
-            generationConfig: {
-                temperature: prompt.temperature ?? 0.1,
-                maxOutputTokens: prompt.maxTokens ?? 16000,
-            },
-            systemInstruction: { parts: [{ text: systemText }] },
-        }
-
+    prepare(prompt: ExtractedPrompt): PreparedPrompt {
+        // Tools are embedded in the system prompt as NLT YES/NO format
         return {
-            url: resolveGeminiEndpoint(model),
-            body,
-            headers: {
-                "Content-Type": "application/json",
-                "x-goog-api-key": apiKey,
-            },
+            system: buildNLTSystemPrompt(prompt),
+            messages: prompt.messages.map(m => ({
+                role: m.role === "system" ? "user" as const : m.role as "user" | "assistant",
+                content: m.content,
+            })),
+            // No native tools — tools are in the system prompt text
+            temperature: prompt.temperature,
+            maxTokens: prompt.maxTokens,
         }
     },
 
-    parseResponse(data: any): LLMResponse {
-        const parts = data.candidates?.[0]?.content?.parts || []
-        const text = parts
-            .filter((p: any) => p.text)
-            .map((p: any) => p.text)
-            .join("\n")
-
-        // Extract thinking section
-        const thinkMatch = text.match(/Thinking:\s*([\s\S]*?)(?=\n\S+\s*[–—:-]\s*(?:YES|NO))/i)
-        const thinking = thinkMatch ? thinkMatch[1].trim() : ""
-
-        // Detect tool names from the YES/NO pattern
-        const toolNameRegex = /^(\S+)\s*[–—:-]\s*(YES|NO)\b/gm
-        const detectedTools: string[] = []
-        let m
-        while ((m = toolNameRegex.exec(text)) !== null) {
-            if (!detectedTools.includes(m[1])) {
-                detectedTools.push(m[1])
-            }
-        }
-
-        const usage = data.usageMetadata
-        return {
-            text: thinking,
-            toolCalls: parseNLTResponse(text, detectedTools),
-            raw: data,
-            usage: usage ? {
-                inputTokens: usage.promptTokenCount || 0,
-                outputTokens: usage.candidatesTokenCount || 0,
-            } : undefined,
-        }
+    parseToolCalls(text: string): ToolCall[] {
+        return parseNLTToolCalls(text)
     },
 }

@@ -3,14 +3,10 @@
 // The model responds with XML that we parse.
 // This gives the LLM maximum structure to work with.
 
-import type { RenderStrategy, ExtractedPrompt, LLMResponse } from "../types"
-
-function resolveGeminiEndpoint(model: string): string {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-}
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "../types"
 
 /** Build the full XML prompt document — system, tools, and conversation */
-function buildXMLPrompt(prompt: ExtractedPrompt): string {
+function buildXMLDocument(prompt: ExtractedPrompt): string {
     const parts: string[] = []
 
     parts.push(`<prompt>`)
@@ -71,107 +67,64 @@ function escapeXml(text: string): string {
         .replace(/"/g, "&quot;")
 }
 
-/** Minimal XML parser — extracts tool calls from the model's XML response */
-function parseXMLToolCalls(text: string): LLMResponse["toolCalls"] {
-    const calls: LLMResponse["toolCalls"] = []
-
-    // Match <call tool="name">...</call> blocks (new format)
-    const callRegex = /<call\s+tool="([^"]+)">([\s\S]*?)<\/call>/g
-    let match
-    while ((match = callRegex.exec(text)) !== null) {
-        const toolName = match[1].trim()
-        const body = match[2]
-        const args: Record<string, any> = {}
-
-        // Parse <param name="key">value</param>
-        const paramRegex = /<param\s+name="([^"]+)">([\s\S]*?)<\/param>/g
-        let pm
-        while ((pm = paramRegex.exec(body)) !== null) {
-            args[pm[1].trim()] = pm[2].trim()
-        }
-        calls.push({ name: toolName, args })
-    }
-
-    // Fallback: legacy <invocation> format
-    if (calls.length === 0) {
-        const invocationRegex = /<invocation>([\s\S]*?)<\/invocation>/g
-        while ((match = invocationRegex.exec(text)) !== null) {
-            const block = match[1]
-            const toolMatch = block.match(/<tool>([\s\S]*?)<\/tool>/)
-            const paramsMatch = block.match(/<params>([\s\S]*?)<\/params>/)
-
-            if (toolMatch) {
-                const args: Record<string, any> = {}
-                if (paramsMatch) {
-                    const paramRegex = /<(\w+)>([\s\S]*?)<\/\1>/g
-                    let pm
-                    while ((pm = paramRegex.exec(paramsMatch[1])) !== null) {
-                        args[pm[1]] = pm[2].trim()
-                    }
-                }
-                calls.push({ name: toolMatch[1].trim(), args })
-            }
-        }
-    }
-
-    return calls
-}
-
-/** Concatenate all text parts from a Gemini response */
-function collectResponseText(data: any): string {
-    const parts = data.candidates?.[0]?.content?.parts || []
-    return parts
-        .filter((p: any) => p.text)
-        .map((p: any) => p.text)
-        .join("\n")
-}
-
 export const xml: RenderStrategy = {
     name: "xml",
 
-    buildRequest(prompt: ExtractedPrompt, apiKey: string) {
-        const model = prompt.model || "gemini-2.5-flash"
-
-        // The entire prompt is one XML document — sent as the user message
-        const xmlPrompt = buildXMLPrompt(prompt)
-
-        const body: any = {
-            contents: [{
-                role: "user",
-                parts: [{ text: xmlPrompt }],
-            }],
-            generationConfig: {
-                temperature: prompt.temperature ?? 0.1,
-                maxOutputTokens: prompt.maxTokens ?? 4000,
-            },
-        }
+    prepare(prompt: ExtractedPrompt): PreparedPrompt {
+        // The entire prompt is one XML document — sent as a single user message
+        const xmlDocument = buildXMLDocument(prompt)
 
         return {
-            url: resolveGeminiEndpoint(model),
-            body,
-            headers: {
-                "Content-Type": "application/json",
-                "x-goog-api-key": apiKey,
-            },
+            // No system — everything is in the XML document
+            messages: [{ role: "user", content: xmlDocument }],
+            // No native tools — tools are embedded in XML
+            temperature: prompt.temperature,
+            maxTokens: prompt.maxTokens,
         }
     },
 
-    parseResponse(data: any): LLMResponse {
-        const text = collectResponseText(data)
+    parseToolCalls(text: string): ToolCall[] {
+        const calls: ToolCall[] = []
 
-        // Extract message from <message> tag
-        const msgMatch = text.match(/<message>([\s\S]*?)<\/message>/)
-        const message = msgMatch ? msgMatch[1].trim() : text.replace(/<[^>]+>/g, "").trim()
+        // Match <call tool="name">...</call> blocks
+        const callRegex = /<call\s+tool="([^"]+)">([\s\S]*?)<\/call>/g
+        let match
+        while ((match = callRegex.exec(text)) !== null) {
+            const toolName = match[1].trim()
+            const body = match[2]
+            const args: Record<string, any> = {}
 
-        const usage = data.usageMetadata
-        return {
-            text: message,
-            toolCalls: parseXMLToolCalls(text),
-            raw: data,
-            usage: usage ? {
-                inputTokens: usage.promptTokenCount || 0,
-                outputTokens: usage.candidatesTokenCount || 0,
-            } : undefined,
+            // Parse <param name="key">value</param>
+            const paramRegex = /<param\s+name="([^"]+)">([\s\S]*?)<\/param>/g
+            let pm
+            while ((pm = paramRegex.exec(body)) !== null) {
+                args[pm[1].trim()] = pm[2].trim()
+            }
+            calls.push({ name: toolName, args })
         }
+
+        // Fallback: legacy <invocation> format
+        if (calls.length === 0) {
+            const invocationRegex = /<invocation>([\s\S]*?)<\/invocation>/g
+            while ((match = invocationRegex.exec(text)) !== null) {
+                const block = match[1]
+                const toolMatch = block.match(/<tool>([\s\S]*?)<\/tool>/)
+                const paramsMatch = block.match(/<params>([\s\S]*?)<\/params>/)
+
+                if (toolMatch) {
+                    const args: Record<string, any> = {}
+                    if (paramsMatch) {
+                        const paramRegex = /<(\w+)>([\s\S]*?)<\/\1>/g
+                        let pm
+                        while ((pm = paramRegex.exec(paramsMatch[1])) !== null) {
+                            args[pm[1]] = pm[2].trim()
+                        }
+                    }
+                    calls.push({ name: toolMatch[1].trim(), args })
+                }
+            }
+        }
+
+        return calls
     },
 }

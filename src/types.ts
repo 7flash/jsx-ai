@@ -97,6 +97,18 @@ export interface ExtractedPrompt {
     strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
 }
 
+// ── Provider-agnostic prepared prompt ──
+// This is what a strategy produces — no Gemini/OpenAI specifics.
+
+export interface PreparedPrompt {
+    system?: string
+    messages: { role: "user" | "assistant"; content: string }[]
+    /** Structured tool declarations for native FC strategies (native, hybrid) */
+    nativeTools?: ExtractedTool[]
+    temperature?: number
+    maxTokens?: number
+}
+
 // ── LLM response types ──
 
 export interface ToolCall {
@@ -116,15 +128,13 @@ export interface LLMResponse {
 }
 
 // ── Strategy interface ──
+// Strategies are PROVIDER-AGNOSTIC. They transform the prompt shape
+// and parse tool calls from text — but never build API-specific bodies.
 
 export interface RenderStrategy {
     name: string
-    /** Build the API request body from extracted prompt data */
-    buildRequest(prompt: ExtractedPrompt, apiKey: string): {
-        url: string
-        body: any
-        headers: Record<string, string>
-    }
-    /** Parse the API response into a structured LLMResponse */
-    parseResponse(data: any): LLMResponse
+    /** Transform extracted prompt into provider-agnostic prepared prompt */
+    prepare(prompt: ExtractedPrompt): PreparedPrompt
+    /** Parse tool calls from response text (for text-based strategies: xml, natural, nlt) */
+    parseToolCalls?(text: string): ToolCall[]
 }

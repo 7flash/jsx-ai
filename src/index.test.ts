@@ -248,7 +248,7 @@ describe("composable components", () => {
 describe("native strategy", () => {
     const { native } = require("./strategies/native")
 
-    test("builds correct request structure", () => {
+    test("prepares prompt with native tools", () => {
         const prompt = extract(
             h("prompt", {
                 model: "gemini-2.5-flash",
@@ -264,57 +264,25 @@ describe("native strategy", () => {
             })
         )
 
-        const { url, body } = native.buildRequest(prompt, "test-key")
+        const prepared = native.prepare(prompt)
 
-        expect(url).toContain("gemini-2.5-flash")
-        expect(body.systemInstruction.parts[0].text).toBe("You are helpful")
-        expect(body.tools[0].functionDeclarations.length).toBe(1)
-        expect(body.tools[0].functionDeclarations[0].name).toBe("exec")
-        expect(body.toolConfig.functionCallingConfig.mode).toBe("AUTO")
-        expect(body.contents.length).toBe(1)
+        expect(prepared.system).toBe("You are helpful")
+        expect(prepared.nativeTools?.length).toBe(1)
+        expect(prepared.nativeTools[0].name).toBe("exec")
+        expect(prepared.messages.length).toBe(1)
+        expect(prepared.messages[0].role).toBe("user")
+        expect(prepared.messages[0].content).toBe("Run ls")
     })
 
-    test("parses function call response", () => {
-        const mockResponse = {
-            candidates: [{
-                content: {
-                    parts: [
-                        { functionCall: { name: "exec", args: { cmd: "ls -la" } } },
-                    ],
-                },
-            }],
-            usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10 },
-        }
-
-        const result = native.parseResponse(mockResponse)
-        expect(result.toolCalls.length).toBe(1)
-        expect(result.toolCalls[0].name).toBe("exec")
-        expect(result.toolCalls[0].args.cmd).toBe("ls -la")
-        expect(result.usage?.inputTokens).toBe(100)
-    })
-
-    test("parses mixed text + tool call response", () => {
-        const mockResponse = {
-            candidates: [{
-                content: {
-                    parts: [
-                        { text: "I'll run the command for you." },
-                        { functionCall: { name: "exec", args: { cmd: "ls" } } },
-                    ],
-                },
-            }],
-        }
-
-        const result = native.parseResponse(mockResponse)
-        expect(result.text).toBe("I'll run the command for you.")
-        expect(result.toolCalls.length).toBe(1)
+    test("native has no parseToolCalls (provider handles FC)", () => {
+        expect(native.parseToolCalls).toBeUndefined()
     })
 })
 
 describe("xml strategy", () => {
     const { xml } = require("./strategies/xml")
 
-    test("builds request with full XML document as user content", () => {
+    test("prepares prompt as single XML user message", () => {
         const prompt = extract(
             h("prompt", {
                 model: "gemini-2.5-flash",
@@ -331,14 +299,15 @@ describe("xml strategy", () => {
             })
         )
 
-        const { body } = xml.buildRequest(prompt, "test-key")
+        const prepared = xml.prepare(prompt)
 
-        // Full XML strategy: no systemInstruction, everything in user content
-        expect(body.systemInstruction).toBeUndefined()
-        expect(body.contents.length).toBe(1)
-        expect(body.contents[0].role).toBe("user")
+        // XML strategy: no system, no native tools — everything in one user message
+        expect(prepared.system).toBeUndefined()
+        expect(prepared.nativeTools).toBeUndefined()
+        expect(prepared.messages.length).toBe(1)
+        expect(prepared.messages[0].role).toBe("user")
 
-        const text = body.contents[0].parts[0].text
+        const text = prepared.messages[0].content
         expect(text).toContain("<prompt>")
         expect(text).toContain("<system>You are helpful</system>")
         expect(text).toContain('<tool name="exec"')
@@ -346,38 +315,24 @@ describe("xml strategy", () => {
         expect(text).toContain("<response_format>")
     })
 
-    test("parses new-format XML response with <call> tags", () => {
-        const mockResponse = {
-            candidates: [{
-                content: {
-                    parts: [{
-                        text: `<response>
+    test("parseToolCalls: new-format <call> tags", () => {
+        const text = `<response>
   <message>I'll list the files</message>
   <tool_calls>
     <call tool="exec">
       <param name="cmd">ls -la</param>
     </call>
   </tool_calls>
-</response>`,
-                    }],
-                },
-            }],
-            usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 50 },
-        }
+</response>`
 
-        const result = xml.parseResponse(mockResponse)
-        expect(result.text).toBe("I'll list the files")
-        expect(result.toolCalls.length).toBe(1)
-        expect(result.toolCalls[0].name).toBe("exec")
-        expect(result.toolCalls[0].args.cmd).toBe("ls -la")
+        const calls = xml.parseToolCalls(text)
+        expect(calls.length).toBe(1)
+        expect(calls[0].name).toBe("exec")
+        expect(calls[0].args.cmd).toBe("ls -la")
     })
 
-    test("parses legacy <invocation> format (backward compat)", () => {
-        const mockResponse = {
-            candidates: [{
-                content: {
-                    parts: [{
-                        text: `<response>
+    test("parseToolCalls: legacy <invocation> format", () => {
+        const text = `<response>
   <message>Reading and searching</message>
   <tool_invocations>
     <invocation>
@@ -389,26 +344,18 @@ describe("xml strategy", () => {
       <params><pattern>*.test.ts</pattern><path>src</path></params>
     </invocation>
   </tool_invocations>
-</response>`,
-                    }],
-                },
-            }],
-        }
+</response>`
 
-        const result = xml.parseResponse(mockResponse)
-        expect(result.toolCalls.length).toBe(2)
-        expect(result.toolCalls[0].name).toBe("read_file")
-        expect(result.toolCalls[0].args.path).toBe("src/app.ts")
-        expect(result.toolCalls[1].name).toBe("search")
-        expect(result.toolCalls[1].args.pattern).toBe("*.test.ts")
+        const calls = xml.parseToolCalls(text)
+        expect(calls.length).toBe(2)
+        expect(calls[0].name).toBe("read_file")
+        expect(calls[0].args.path).toBe("src/app.ts")
+        expect(calls[1].name).toBe("search")
+        expect(calls[1].args.pattern).toBe("*.test.ts")
     })
 
-    test("parses multiple new-format tool calls", () => {
-        const mockResponse = {
-            candidates: [{
-                content: {
-                    parts: [{
-                        text: `<response>
+    test("parseToolCalls: multiple new-format calls", () => {
+        const text = `<response>
   <message>Creating files</message>
   <tool_calls>
     <call tool="write_file">
@@ -420,36 +367,27 @@ describe("xml strategy", () => {
       <param name="content">import { expect } from "bun:test"</param>
     </call>
   </tool_calls>
-</response>`,
-                    }],
-                },
-            }],
-        }
+</response>`
 
-        const result = xml.parseResponse(mockResponse)
-        expect(result.toolCalls.length).toBe(2)
-        expect(result.toolCalls[0].name).toBe("write_file")
-        expect(result.toolCalls[0].args.path).toBe("src/server.ts")
-        expect(result.toolCalls[1].name).toBe("write_file")
-        expect(result.toolCalls[1].args.path).toBe("src/test.ts")
+        const calls = xml.parseToolCalls(text)
+        expect(calls.length).toBe(2)
+        expect(calls[0].name).toBe("write_file")
+        expect(calls[0].args.path).toBe("src/server.ts")
+        expect(calls[1].name).toBe("write_file")
+        expect(calls[1].args.path).toBe("src/test.ts")
     })
 
-    test("handles multi-part response", () => {
-        const mockResponse = {
-            candidates: [{
-                content: {
-                    parts: [
-                        { text: `<response>\n  <message>Part 1</message>` },
-                        { text: `  <tool_calls>\n    <call tool="exec">\n      <param name="cmd">ls</param>\n    </call>` },
-                        { text: `  </tool_calls>\n</response>` },
-                    ],
-                },
-            }],
-        }
+    test("parseToolCalls: multi-part text", () => {
+        const text = `<response>
+  <message>Part 1</message>  <tool_calls>
+    <call tool="exec">
+      <param name="cmd">ls</param>
+    </call>  </tool_calls>
+</response>`
 
-        const result = xml.parseResponse(mockResponse)
-        expect(result.toolCalls.length).toBe(1)
-        expect(result.toolCalls[0].name).toBe("exec")
+        const calls = xml.parseToolCalls(text)
+        expect(calls.length).toBe(1)
+        expect(calls[0].name).toBe("exec")
     })
 })
 
