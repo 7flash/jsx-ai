@@ -1,0 +1,9 @@
+node_modules/
+bun.lock
+.config.toml
+
+# Bench artifacts
+bench/logs/
+bench/results.json
+bench/output.txt
+bench/REPORT.md

@@ -1,0 +1,32 @@
+{
+    "compilerOptions": {
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "jsxImportSource": "jsx-ai",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "outDir": "dist",
+        "rootDir": ".",
+        "declaration": true,
+        "paths": {
+            "jsx-ai": [
+                "./src/index.ts"
+            ],
+            "jsx-ai/jsx-runtime": [
+                "./src/jsx-runtime.ts"
+            ],
+            "jsx-ai/jsx-dev-runtime": [
+                "./src/jsx-dev-runtime.ts"
+            ]
+        }
+    },
+    "include": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "examples/**/*.tsx",
+        "bench/**/*.tsx"
+    ]
+}

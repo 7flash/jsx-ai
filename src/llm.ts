@@ -1,0 +1,121 @@
+// ── callLLM — the main entry point ──
+// Accepts a JSX tree and calls the LLM using the optimal strategy
+
+import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt } from "./types"
+import { extract } from "./render"
+import { native } from "./strategies/native"
+import { xml } from "./strategies/xml"
+import { natural } from "./strategies/natural"
+import { hybrid } from "./strategies/hybrid"
+
+export interface CallOptions {
+    /** API key (defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var) */
+    apiKey?: string
+    /** Override the strategy ("native" | "xml" | "auto"). Default: "auto" */
+    strategy?: "native" | "xml" | "natural" | "hybrid" | "auto"
+    /** Override the model */
+    model?: string
+    /** Override temperature */
+    temperature?: number
+    /** Override max tokens */
+    maxTokens?: number
+}
+
+const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybrid }
+
+/** Resolve which strategy to use */
+function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStrategy {
+    const choice = override || prompt.strategy || "auto"
+
+    if (choice === "xml") return xml
+    if (choice === "native") return native
+    if (choice === "natural") return natural
+    if (choice === "hybrid") return hybrid
+
+    // auto — use hybrid (best overall per benchmarks)
+    return hybrid
+}
+
+/** Resolve API key from options, env, or config file */
+function resolveApiKey(options?: CallOptions): string {
+    if (options?.apiKey) return options.apiKey
+    if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY
+    if (process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY
+
+    // Try .config.toml
+    try {
+        const fs = require("fs")
+        const path = require("path")
+        const toml = fs.readFileSync(path.resolve(process.cwd(), ".config.toml"), "utf-8")
+        const match = toml.match(/api_key\s*=\s*"([^"]+)"/)
+        if (match) return match[1]
+    } catch { }
+
+    throw new Error("No API key found. Set GEMINI_API_KEY, pass apiKey option, or add .config.toml")
+}
+
+/**
+ * Call an LLM with a JSX-defined prompt.
+ * 
+ * ```tsx
+ * const result = await callLLM(
+ *   <prompt model="gemini-2.5-flash">
+ *     <system>You are a coding agent</system>
+ *     <tool name="exec" description="Run a shell command">
+ *       <param name="command" type="string" required>The command to run</param>
+ *     </tool>
+ *     <message role="user">List the files in the current directory</message>
+ *   </prompt>
+ * )
+ * 
+ * result.toolCalls  // [{ name: "exec", args: { command: "ls" } }]
+ * result.text       // ""  (native FC returns structured calls, not text)
+ * ```
+ */
+export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<LLMResponse> {
+    // 1. Extract structured data from JSX tree
+    const prompt = extract(tree)
+
+    // 2. Apply option overrides
+    if (options?.model) prompt.model = options.model
+    if (options?.temperature != null) prompt.temperature = options.temperature
+    if (options?.maxTokens != null) prompt.maxTokens = options.maxTokens
+
+    // 3. Resolve strategy
+    const strategy = resolveStrategy(prompt, options?.strategy)
+
+    // 4. Resolve API key
+    const apiKey = resolveApiKey(options)
+
+    // 5. Build and send request
+    const { url, body, headers } = strategy.buildRequest(prompt, apiKey)
+
+    const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+    })
+
+    if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(`LLM API error ${res.status}: ${errText.substring(0, 500)}`)
+    }
+
+    const data = await res.json()
+
+    // 6. Parse response
+    return strategy.parseResponse(data)
+}
+
+/**
+ * Render a JSX tree to the extracted prompt data (without calling the LLM).
+ * Useful for debugging/inspecting what would be sent.
+ */
+export function render(tree: JsxAiNode): ExtractedPrompt {
+    return extract(tree)
+}
+
+/** Register a custom strategy */
+export function registerStrategy(name: string, strategy: RenderStrategy): void {
+    STRATEGIES[name] = strategy
+}

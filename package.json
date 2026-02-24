@@ -1,0 +1,31 @@
+{
+    "name": "jsx-ai",
+    "version": "0.1.0",
+    "description": "JSX interface for structured LLM calls — tools, messages, and prompts as composable components",
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": "./src/index.ts",
+        "./jsx-runtime": "./src/jsx-runtime.ts",
+        "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts"
+    },
+    "scripts": {
+        "test": "bun test",
+        "bench": "bun run bench/strategies.ts"
+    },
+    "keywords": [
+        "jsx",
+        "ai",
+        "llm",
+        "tools",
+        "function-calling",
+        "gemini",
+        "openai",
+        "anthropic"
+    ],
+    "license": "MIT",
+    "dependencies": {
+        "measure-fn": "^3.7.0"
+    }
+}
