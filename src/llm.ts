@@ -7,12 +7,13 @@ import { native } from "./strategies/native"
 import { xml } from "./strategies/xml"
 import { natural } from "./strategies/natural"
 import { hybrid } from "./strategies/hybrid"
+import { nlt } from "./strategies/nlt"
 
 export interface CallOptions {
     /** API key (defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var) */
     apiKey?: string
-    /** Override the strategy ("native" | "xml" | "auto"). Default: "auto" */
-    strategy?: "native" | "xml" | "natural" | "hybrid" | "auto"
+    /** Override the strategy ("native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"). Default: "auto" */
+    strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
     /** Override the model */
     model?: string
     /** Override temperature */
@@ -21,7 +22,7 @@ export interface CallOptions {
     maxTokens?: number
 }
 
-const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybrid }
+const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybrid, nlt }
 
 /** Resolve which strategy to use */
 function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStrategy {
@@ -31,6 +32,7 @@ function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStra
     if (choice === "native") return native
     if (choice === "natural") return natural
     if (choice === "hybrid") return hybrid
+    if (choice === "nlt") return nlt
 
     // auto — use hybrid (best overall per benchmarks)
     return hybrid
@@ -103,8 +105,10 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
 
     const data = await res.json()
 
-    // 6. Parse response
-    return strategy.parseResponse(data)
+    // 6. Parse response and attach request for observability
+    const result = strategy.parseResponse(data)
+    result.request = { url, body }
+    return result
 }
 
 /**

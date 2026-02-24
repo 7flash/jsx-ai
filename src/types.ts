@@ -108,6 +108,7 @@ export interface LLMResponse {
     text: string
     toolCalls: ToolCall[]
     raw: any
+    request?: { url: string; body: any }
     usage?: {
         inputTokens: number
         outputTokens: number
