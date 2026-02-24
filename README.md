@@ -1,75 +1,75 @@
 # jsx-ai
 
-JSX interface for structured LLM calls. Define tools, messages, and prompts as composable components.
+JSX interface for structured LLM calls. Tools, messages, and prompts become composable components.
 
 ```tsx
 import { callLLM } from "jsx-ai"
 
 const result = await callLLM(
-  <prompt model="gemini-2.5-flash">
+  <>
     <system>You are a coding agent</system>
     <tool name="exec" description="Run a shell command">
       <param name="command" type="string" required>The command to run</param>
     </tool>
     <message role="user">List all TypeScript files</message>
-  </prompt>
+  </>,
+  { model: "gemini-2.5-flash" }
+)
+
+result.toolCalls  // [{ name: "exec", args: { command: "find . -name '*.ts'" } }]
+result.text       // ""
+result.usage      // { inputTokens: 42, outputTokens: 15 }
+```
+
+## Why JSX?
+
+**Before** — tools as JSON schemas, stringly-typed, not reusable:
+
+```ts
+const response = await fetch(url, {
+  body: JSON.stringify({
+    model: "gemini-2.5-flash",
+    systemInstruction: { parts: [{ text: "You are a coding agent" }] },
+    tools: [{ functionDeclarations: [{
+      name: "exec",
+      description: "Run a shell command",
+      parameters: { type: "object", properties: {
+        command: { type: "string", description: "The command to run" }
+      }, required: ["command"] }
+    }] }],
+    contents: [{ role: "user", parts: [{ text: "List all TypeScript files" }] }],
+  })
+})
+const data = await response.json()
+const toolCall = data.candidates[0].content.parts[0].functionCall
+```
+
+**After** — same call, composable and provider-agnostic:
+
+```tsx
+const ExecTool = () => (
+  <tool name="exec" description="Run a shell command">
+    <param name="command" type="string" required>The command to run</param>
+  </tool>
+)
+
+const result = await callLLM(
+  <>
+    <system>You are a coding agent</system>
+    <ExecTool />
+    <message role="user">List all TypeScript files</message>
+  </>,
+  { model: "gemini-2.5-flash" }  // or "gpt-4o" or "claude-3-sonnet-20240229"
 )
 
 result.toolCalls  // [{ name: "exec", args: { command: "find . -name '*.ts'" } }]
 ```
 
-## Why JSX?
+## Installation
 
-**Composability.** Tools become reusable components:
-
-```tsx
-const ExecTool = () => (
-  <tool name="exec" description="Run a shell command">
-    <param name="command" type="string" required>Shell command</param>
-  </tool>
-)
-
-const ReadFile = () => (
-  <tool name="read_file" description="Read file contents">
-    <param name="path" type="string" required>File path</param>
-  </tool>
-)
-
-// Compose tool sets
-const CodingTools = () => (
-  <>
-    <ExecTool />
-    <ReadFile />
-  </>
-)
-
-// Use in any prompt
-await callLLM(
-  <prompt>
-    <CodingTools />
-    <message role="user">Read package.json</message>
-  </prompt>
-)
-```
-
-## How It Works
-
-```
-JSX Tree → extract() → { tools, messages, system } → strategy.buildRequest() → LLM API
-                                                     ↕
-                                              strategy.parseResponse() → { text, toolCalls }
-```
-
-1. JSX is transpiled using a **custom runtime** (not React) — each `<tag>` becomes a lightweight node
-2. `extract()` walks the tree and separates tools, messages, and system prompts
-3. A **strategy** converts the extracted data into an API request:
-   - **`native`** (default) — tools go into the API's structured `tools` field. 17x fewer output tokens, 2x faster.
-   - **`xml`** — tools are described in the system prompt text, model responds with XML. Better multi-tool batching.
-
-## Install
-
-```bash
+```sh
 bun add jsx-ai
+# or: npm install jsx-ai
 ```
 
 Add to `tsconfig.json`:
@@ -82,29 +82,152 @@ Add to `tsconfig.json`:
 }
 ```
 
-## API
+## ✨ What You Get
 
-### `callLLM(tree, options?)`
+- **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name
+- **5 strategies** → native FC, NLT, XML, natural, hybrid — same prompt, different encodings
+- **Composable** → tools and prompts are reusable JSX components
+- **Skills** → two-phase skill loading from `.md` files (discovery → resolution)
+- **Type-safe** → full TypeScript types, custom JSX runtime (not React)
+- **Benchmarked** → multi-turn agentic scenarios scored per strategy
+
+## 🔌 Providers
+
+Auto-detected from model name. Override with `{ provider: "openai" }`.
+
+| Model | Provider | Auth | Env var |
+|-------|----------|------|---------|
+| `gemini-*` | Gemini | x-goog-api-key | `GEMINI_API_KEY` |
+| `gpt-*`, `o4-*` | OpenAI | Bearer | `OPENAI_API_KEY` |
+| `claude-*` | Anthropic | x-api-key + version | `ANTHROPIC_API_KEY` |
+| `deepseek-*` | OpenAI (compat) | Bearer | `DEEPSEEK_API_KEY` |
 
 ```tsx
-const result = await callLLM(
-  <prompt model="gemini-2.5-flash" temperature={0.3}>
-    <system>You are helpful</system>
-    <tool name="search" description="Search the web">
-      <param name="query" type="string" required>Search query</param>
-      <param name="limit" type="number">Max results</param>
-    </tool>
-    <message role="user">Find TypeScript 6 release notes</message>
-  </prompt>,
-  { strategy: "native" }  // optional
-)
+// Gemini (default)
+await callLLM(<>...</>, { model: "gemini-2.5-flash" })
 
-result.text        // Model's text response (if any)
-result.toolCalls   // [{ name: "search", args: { query: "..." } }]
-result.usage       // { inputTokens, outputTokens }
+// OpenAI
+await callLLM(<>...</>, { model: "gpt-4o" })
+
+// Anthropic
+await callLLM(<>...</>, { model: "claude-3-sonnet-20240229" })
 ```
 
-### `render(tree)`
+Provider nuances handled automatically:
+- Gemini: merges consecutive same-role messages (API rejects them otherwise)
+- OpenAI `o4-*`: uses `max_completion_tokens` + forced `temperature=1.0`
+- Anthropic: system prompt as top-level field, `tool_use` blocks, `input_schema`
+- DeepSeek: routes to `api.deepseek.com` with OpenAI-compatible format
+
+### Custom providers
+
+```tsx
+import { registerProvider } from "jsx-ai"
+import type { Provider } from "jsx-ai"
+
+class MyProvider implements Provider {
+  name = "custom"
+  buildRequest(prepared, model, apiKey) { /* ... */ }
+  parseResponse(data) { /* ... */ }
+}
+
+registerProvider("custom", new MyProvider())
+await callLLM(<>...</>, { provider: "custom", model: "my-model" })
+```
+
+## 🎯 Strategies
+
+Same JSX prompt, different tool encodings. Each strategy controls how tools appear to the model and how responses are parsed.
+
+| Strategy | Tools sent as | Response parsed from | Best for |
+|----------|---------------|---------------------|----------|
+| `native` | API `tools` field | Structured FC | Single tool calls, lowest tokens |
+| `nlt` | Text descriptions + native FC | Structured FC | Multi-turn agentic loops |
+| `xml` | Text with XML schema | XML in text | Multi-tool batching |
+| `natural` | Text descriptions | Action blocks in text | Complex reasoning + tools |
+| `hybrid` | API `tools` + text schema | Either | Balanced |
+
+```tsx
+// Strategy via options
+await callLLM(<>...</>, { strategy: "nlt" })
+
+// Or register a custom one
+import { registerStrategy } from "jsx-ai"
+registerStrategy("my-strategy", { prepare, parseResponse })
+```
+
+### Benchmark results (gemini-2.5-flash, kv-store scenario)
+
+3-turn agentic loop: Plan → Execute → Adapt
+
+| Strategy | Turn 1 (Plan) | Turn 2 (Execute) | Turn 3 (Adapt) | Total |
+|----------|:---:|:---:|:---:|:---:|
+| **nlt** | 100% | 73% | 84% | **86%** |
+| **natural** | 100% | 67% | 69% | **79%** |
+| **native** | 46% | 5% | 33% | **28%** |
+
+> Native FC underperforms in agentic loops because it batches homogeneous tool calls — calling 5× `use_skill` but skipping `set_objectives` in the same turn.
+
+## 📦 JSX Elements
+
+| Element | Props | Description |
+|---------|-------|-------------|
+| `<system>` | — | System instruction (text children) |
+| `<tool>` | `name`, `description` | Tool/function declaration |
+| `<param>` | `name`, `type`, `required`, `enum` | Tool parameter (children = description) |
+| `<message>` | `role` (`user` \| `assistant`) | Conversation message |
+| `<prompt>` | `model`, `temperature`, `maxTokens`, `strategy` | Optional config wrapper |
+
+## 🧠 Skills
+
+Two-phase skill loading from `.md` files with YAML frontmatter:
+
+```md
+---
+name: bun-expert
+description: Bun runtime expertise — Bun.serve(), bun:sqlite, bun:test
+---
+## Bun Runtime
+- HTTP: Bun.serve() with export default { port, fetch } pattern
+- Database: import { Database } from "bun:sqlite"
+- Testing: import { describe, it, expect } from "bun:test"
+```
+
+**Phase 1 — Discovery:** skills appear as a lightweight catalog
+
+```tsx
+import { Skill, UseSkillTool } from "jsx-ai"
+
+await callLLM(
+  <>
+    <Skill path="skills/bun-expert.md" />
+    <Skill path="skills/security.md" />
+    <UseSkillTool />
+    <message role="user">Build a KV store API</message>
+  </>
+)
+// Model sees: "Available skill: bun-expert — Bun runtime expertise"
+// Model calls: use_skill({ skill_name: "bun-expert" })
+```
+
+**Phase 2 — Resolution:** requested skills expand to full content
+
+```tsx
+import { Skill, resolveSkills } from "jsx-ai"
+
+const resolved = resolveSkills(skillPaths, ["bun-expert"])
+
+await callLLM(
+  <>
+    <Skill path="skills/bun-expert.md" resolve />
+    <Skill path="skills/security.md" />
+    <message role="user">Now implement it</message>
+  </>
+)
+// Model sees full bun-expert methodology + just the catalog entry for security
+```
+
+## 🔍 `render(tree)`
 
 Inspect the extracted prompt without calling the LLM:
 
@@ -112,58 +235,30 @@ Inspect the extracted prompt without calling the LLM:
 import { render } from "jsx-ai"
 
 const extracted = render(
-  <prompt model="gemini-2.5-flash">
+  <>
+    <system>You are helpful</system>
     <tool name="exec" description="Run command">
       <param name="command" type="string" required>Command</param>
     </tool>
     <message role="user">List files</message>
-  </prompt>
+  </>
 )
 
 extracted.tools     // [{ name: "exec", parameters: { ... } }]
 extracted.messages  // [{ role: "user", content: "List files" }]
-extracted.model     // "gemini-2.5-flash"
+extracted.system    // "You are helpful"
 ```
 
-## JSX Elements
+## ⚙️ CallOptions
 
-| Element | Props | Description |
-|---------|-------|-------------|
-| `<prompt>` | `model`, `temperature`, `maxTokens`, `strategy` | Root container |
-| `<system>` | — | System instruction (text children) |
-| `<tool>` | `name`, `description` | Tool/function declaration |
-| `<param>` | `name`, `type`, `required`, `enum` | Tool parameter (text children = description) |
-| `<message>` | `role` (`user` \| `assistant` \| `tool`) | Conversation message |
-
-## Strategies
-
-### Native (default)
-Tools sent via the API's structured `tools` field. The model returns structured JSON function calls.
-
-**Pros:** 17x fewer output tokens, 2x faster, zero parse risk, schema enforcement
-**Use when:** You want optimal performance (most cases)
-
-### XML
-Tools described in the system prompt. The model responds with XML markup.
-
-**Pros:** Better multi-tool batching per turn
-**Use when:** You need the model to call multiple tools simultaneously
-
-```tsx
-// Force XML strategy
-await callLLM(<prompt strategy="xml">...</prompt>)
-
-// Or via options
-await callLLM(<prompt>...</prompt>, { strategy: "xml" })
-```
-
-## API Keys
-
-Resolved in order:
-1. `options.apiKey` parameter
-2. `GEMINI_API_KEY` env var
-3. `GOOGLE_API_KEY` env var
-4. `.config.toml` file in cwd (`[gemini] api_key = "..."`)
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `model` | `string` | `"gemini-2.5-flash"` | Model name (also determines provider) |
+| `provider` | `"gemini" \| "openai" \| "anthropic"` | auto-detected | Force a specific provider |
+| `strategy` | `"native" \| "nlt" \| "xml" \| "natural" \| "hybrid"` | `"auto"` | Tool encoding strategy |
+| `apiKey` | `string` | from env | Override API key |
+| `temperature` | `number` | `0.1` | Sampling temperature |
+| `maxTokens` | `number` | `4000` | Max output tokens |
 
 ## License
 
