@@ -238,3 +238,181 @@ export async function callText(
     const result = provider.parseResponse(data)
     return result.text
 }
+
+/**
+ * Stream LLM responses token-by-token via SSE.
+ * Uses the same provider routing and auth as callText/callLLM.
+ *
+ * ```ts
+ * for await (const chunk of streamLLM("gemini-2.5-flash", [
+ *   { role: "system", content: "You are helpful" },
+ *   { role: "user", content: "Tell me a story" },
+ * ])) {
+ *   process.stdout.write(chunk)
+ * }
+ * ```
+ */
+export async function* streamLLM(
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    options?: { temperature?: number; maxTokens?: number; apiKey?: string },
+): AsyncGenerator<string> {
+    const provider = resolveProvider(model, undefined)
+    const apiKey = resolveApiKey(provider, options)
+    const temperature = options?.temperature ?? 0.3
+    const maxTokens = options?.maxTokens ?? 8000
+
+    const system = messages.find(m => m.role === "system")?.content
+    const nonSystem = messages.filter(m => m.role !== "system" && m.content?.trim())
+
+    // ── Gemini Streaming ──
+    if (provider.name === "gemini") {
+        // Merge consecutive same-role messages (Gemini rejects them)
+        const contents: Array<{ role: string; parts: Array<{ text: string }> }> = []
+        for (const m of nonSystem) {
+            const role = m.role === "assistant" ? "model" : "user"
+            const last = contents[contents.length - 1]
+            if (last && last.role === role) {
+                last.parts[0]!.text += "\n\n" + m.content
+            } else {
+                contents.push({ role, parts: [{ text: m.content }] })
+            }
+        }
+
+        const body = {
+            contents,
+            generationConfig: { temperature, maxOutputTokens: maxTokens },
+            ...(system && { systemInstruction: { parts: [{ text: system }] } }),
+        }
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`
+        const headers = { "Content-Type": "application/json", "x-goog-api-key": apiKey }
+
+        const res = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, `Gemini stream ${model}`)
+        if (!res.ok) {
+            const errText = await res.text()
+            throw new Error(`Gemini stream failed (${res.status}): ${errText.substring(0, 300)}`)
+        }
+
+        yield* parseSSEStream(res, (json: any) => json.candidates?.[0]?.content?.parts?.[0]?.text || "")
+        return
+    }
+
+    // ── Anthropic Streaming ──
+    if (provider.name === "anthropic") {
+        const body = {
+            model,
+            max_tokens: maxTokens,
+            messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
+            stream: true,
+            ...(system && { system }),
+        }
+
+        const res = await fetchWithRetry(
+            "https://api.anthropic.com/v1/messages",
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+                body: JSON.stringify(body),
+            },
+            `Anthropic stream ${model}`,
+        )
+        if (!res.ok) {
+            const errText = await res.text()
+            throw new Error(`Anthropic stream failed (${res.status}): ${errText.substring(0, 300)}`)
+        }
+
+        yield* parseSSEStream(res, (json: any) => {
+            if (json.type === "content_block_delta") return json.delta?.text || ""
+            return ""
+        })
+        return
+    }
+
+    // ── OpenAI-compatible Streaming (OpenAI, DeepSeek, OpenRouter, local) ──
+    const isDeepseek = model.includes("deepseek")
+    const baseUrl = isDeepseek
+        ? "https://api.deepseek.com/v1"
+        : (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")
+
+    const isReasoning = /^o[0-9]/.test(model)
+    const body = isReasoning
+        ? { model, temperature: 1.0, messages, max_completion_tokens: maxTokens, stream: true }
+        : { model, temperature, messages, max_tokens: maxTokens, stream: true }
+
+    const res = await fetchWithRetry(
+        `${baseUrl}/chat/completions`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify(body),
+        },
+        `OpenAI stream ${model}`,
+    )
+    if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(`LLM stream failed (${res.status}): ${errText.substring(0, 300)}`)
+    }
+
+    yield* parseSSEStream(res, (json: any) => json.choices?.[0]?.delta?.content || "")
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//   INTERNALS
+// ═══════════════════════════════════════════════════════════════════
+
+/** Retry fetch on transient errors (429, 500, 502, 503) with exponential backoff */
+async function fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    label: string,
+    attempts = 4,
+    delayMs = 5000,
+): Promise<Response> {
+    for (let i = 0; i < attempts; i++) {
+        const res = await fetch(url, init)
+        if (res.status === 429 || res.status === 500 || res.status === 502 || res.status === 503) {
+            if (i === attempts - 1) {
+                const errText = await res.text()
+                throw new Error(`${label} failed after ${attempts} retries (${res.status}): ${errText.substring(0, 200)}`)
+            }
+            const wait = delayMs * Math.pow(2, i)
+            console.log(`[${label}] ${res.status} — retrying in ${(wait / 1000).toFixed(0)}s (attempt ${i + 1}/${attempts})`)
+            await new Promise(r => setTimeout(r, wait))
+            continue
+        }
+        return res
+    }
+    throw new Error(`${label} exhausted retries`) // unreachable
+}
+
+/** Generic SSE stream parser — reads data: lines and extracts text via extractor fn */
+async function* parseSSEStream(
+    res: Response,
+    extractText: (json: any) => string,
+): AsyncGenerator<string> {
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+
+    while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() || ""
+
+        for (const line of lines) {
+            if (!line.startsWith("data: ")) continue
+            const json = line.slice(6).trim()
+            if (!json || json === "[DONE]") continue
+            try {
+                const data = JSON.parse(json)
+                const text = extractText(data)
+                if (text) yield text
+            } catch { /* skip unparseable chunks */ }
+        }
+    }
+}
