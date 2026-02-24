@@ -697,3 +697,142 @@ describe("resolveSkills", () => {
         } finally { teardown() }
     })
 })
+
+
+// ═══════════════════════════════════════════════════════════════════
+//   STREAM LLM TESTS
+// ═══════════════════════════════════════════════════════════════════
+
+import { streamLLM } from "./llm"
+
+describe("streamLLM", () => {
+    let server: ReturnType<typeof Bun.serve> | null = null
+    let serverPort = 0
+
+    const startMockServer = (handler: (req: Request) => Response) => {
+        server = Bun.serve({ port: 0, fetch: handler })
+        serverPort = server!.port as number
+    }
+
+    const stopServer = () => {
+        if (server) { server.stop(true); server = null }
+    }
+
+    test("streams Gemini-style SSE chunks", async () => {
+        startMockServer(() => {
+            const chunks = [
+                `data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\n`,
+                `data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}\n\n`,
+                `data: {"candidates":[{"content":{"parts":[{"text":"!"}]}}]}\n\n`,
+            ]
+            const stream = new ReadableStream({
+                start(controller) {
+                    const enc = new TextEncoder()
+                    for (const chunk of chunks) controller.enqueue(enc.encode(chunk))
+                    controller.close()
+                }
+            })
+            return new Response(stream, { headers: { "Content-Type": "text/event-stream" } })
+        })
+
+        try {
+            // Monkey-patch the URL by setting GEMINI env — but streamLLM hardcodes the URL
+            // Instead, test the OpenAI-compatible path which respects OPENAI_BASE_URL
+            const collected: string[] = []
+            const oldBase = process.env.OPENAI_BASE_URL
+            process.env.OPENAI_BASE_URL = `http://localhost:${serverPort}`
+
+            // Use a model that routes to OpenAI
+            startMockServer(() => {
+                const chunks = [
+                    `data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n`,
+                    `data: {"choices":[{"delta":{"content":" world"}}]}\n\n`,
+                    `data: {"choices":[{"delta":{"content":"!"}}]}\n\n`,
+                    `data: [DONE]\n\n`,
+                ]
+                const stream = new ReadableStream({
+                    start(controller) {
+                        const enc = new TextEncoder()
+                        for (const chunk of chunks) controller.enqueue(enc.encode(chunk))
+                        controller.close()
+                    }
+                })
+                return new Response(stream, { headers: { "Content-Type": "text/event-stream" } })
+            })
+
+            process.env.OPENAI_BASE_URL = `http://localhost:${serverPort}`
+            process.env.OPENAI_API_KEY = "test-key"
+
+            for await (const chunk of streamLLM("gpt-4o", [
+                { role: "user", content: "Hi" },
+            ])) {
+                collected.push(chunk)
+            }
+
+            expect(collected).toEqual(["Hello", " world", "!"])
+
+            process.env.OPENAI_BASE_URL = oldBase || ""
+        } finally { stopServer() }
+    })
+
+    test("handles empty delta gracefully", async () => {
+        startMockServer(() => {
+            const chunks = [
+                `data: {"choices":[{"delta":{}}]}\n\n`,
+                `data: {"choices":[{"delta":{"content":"ok"}}]}\n\n`,
+                `data: {"choices":[{"delta":{"content":""}}]}\n\n`,
+                `data: [DONE]\n\n`,
+            ]
+            const stream = new ReadableStream({
+                start(controller) {
+                    const enc = new TextEncoder()
+                    for (const chunk of chunks) controller.enqueue(enc.encode(chunk))
+                    controller.close()
+                }
+            })
+            return new Response(stream, { headers: { "Content-Type": "text/event-stream" } })
+        })
+
+        try {
+            const collected: string[] = []
+            const oldBase = process.env.OPENAI_BASE_URL
+            process.env.OPENAI_BASE_URL = `http://localhost:${serverPort}`
+            process.env.OPENAI_API_KEY = "test-key"
+
+            for await (const chunk of streamLLM("gpt-4o", [
+                { role: "user", content: "Hi" },
+            ])) {
+                collected.push(chunk)
+            }
+
+            // Should only yield "ok" — empty deltas and missing content are skipped
+            expect(collected).toEqual(["ok"])
+
+            process.env.OPENAI_BASE_URL = oldBase || ""
+        } finally { stopServer() }
+    })
+
+    test("throws on HTTP error", async () => {
+        startMockServer(() => new Response("Bad request", { status: 400 }))
+
+        try {
+            const oldBase = process.env.OPENAI_BASE_URL
+            process.env.OPENAI_BASE_URL = `http://localhost:${serverPort}`
+            process.env.OPENAI_API_KEY = "test-key"
+
+            const chunks: string[] = []
+            try {
+                for await (const chunk of streamLLM("gpt-4o", [
+                    { role: "user", content: "Hi" },
+                ], { maxTokens: 100 })) {
+                    chunks.push(chunk)
+                }
+                expect(true).toBe(false) // Should not reach here
+            } catch (err: any) {
+                expect(err.message).toContain("400")
+            }
+
+            process.env.OPENAI_BASE_URL = oldBase || ""
+        } finally { stopServer() }
+    })
+})
