@@ -1,0 +1,24 @@
+
+kv-store/native: total=28pct [t1=46pct t2=5pct t3=33pct]
+  Turn 1 (3085ms, 570in/93out, 5 calls): 46pct
+    ✓ called_use_skill, ✓ requested_2+_skills, ✓ requested_bun, ✗ called_set_objectives, ✗ has_reasoning, ✗ 3+_objectives, ✗ mentions_ttl, ✓ no_premature_write
+  Turn 2 (2630ms, 1020in/190out, 1 calls): 5pct
+    ✗ writes_3+_files, ✗ creates_db, ✗ creates_server, ✗ creates_tests, ✗ uses_bun_sqlite, ✗ uses_bun_serve, ✗ uses_bun_test, ✗ imports_types, ✗ uses_prepared_stmt, ✗ has_ttl_logic, ✗ has_kv_endpoints, ✗ has_5+_tests, ✓ no_any
+  Turn 3 (3113ms, 1326in/134out, 1 calls): 33pct
+    ✓ addresses_ttl_bug, ✗ writes_fix, ✗ fix_touches_db_or_server, ✓ updates_objectives, ✗ fix_has_expiry_check, ✗ calls_done, ✗ done_has_summary
+
+kv-store/nlt: total=86pct [t1=100pct t2=73pct t3=84pct]
+  Turn 1 (5259ms, 744in/599out, 6 calls): 100pct
+    ✓ called_use_skill, ✓ requested_2+_skills, ✓ requested_bun, ✓ called_set_objectives, ✓ has_reasoning, ✓ 3+_objectives, ✓ mentions_ttl, ✓ no_premature_write
+  Turn 2 (28517ms, 2118in/6381out, 6 calls): 73pct
+    ✓ writes_3+_files, ✓ creates_db, ✗ creates_server, ✓ creates_tests, ✓ uses_bun_sqlite, ✗ uses_bun_serve, ✓ uses_bun_test, ✓ imports_types, ✓ uses_prepared_stmt, ✓ has_ttl_logic, ✗ has_kv_endpoints, ✓ has_5+_tests, ✗ no_any
+  Turn 3 (62347ms, 9338in/6401out, 5 calls): 84pct
+    ✓ addresses_ttl_bug, ✓ writes_fix, ✓ fix_touches_db_or_server, ✓ updates_objectives, ✓ fix_has_expiry_check, ✗ calls_done, ✗ done_has_summary
+
+kv-store/natural: total=79pct [t1=100pct t2=67pct t3=69pct]
+  Turn 1 (8101ms, 590in/1382out, 6 calls): 100pct
+    ✓ called_use_skill, ✓ requested_2+_skills, ✓ requested_bun, ✓ called_set_objectives, ✓ has_reasoning, ✓ 3+_objectives, ✓ mentions_ttl, ✓ no_premature_write
+  Turn 2 (65909ms, 1734in/16000out, 9 calls): 67pct
+    ✓ writes_3+_files, ✓ creates_db, ✗ creates_server, ✓ creates_tests, ✓ uses_bun_sqlite, ✗ uses_bun_serve, ✓ uses_bun_test, ✓ imports_types, ✓ uses_prepared_stmt, ✓ has_ttl_logic, ✗ has_kv_endpoints, ✗ has_5+_tests, ✗ no_any
+  Turn 3 (10648ms, 2971in/2274out, 1 calls): 69pct
+    ✓ addresses_ttl_bug, ✓ writes_fix, ✓ fix_touches_db_or_server, ✗ updates_objectives, ✓ fix_has_expiry_check, ✗ calls_done, ✗ done_has_summary

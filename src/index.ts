@@ -2,19 +2,20 @@
 // JSX interface for structured LLM calls
 //
 // Usage:
-//   import { callLLM, render } from "jsx-ai"
+//   import { callLLM } from "jsx-ai"
 //
 //   const result = await callLLM(
-//     <prompt model="gemini-2.5-flash">
+//     <>
 //       <system>You are a helpful assistant</system>
 //       <tool name="search" description="Search the web">
 //         <param name="query" type="string" required>Search query</param>
 //       </tool>
 //       <message role="user">Find info about TypeScript 6</message>
-//     </prompt>
+//     </>,
+//     { model: "gemini-2.5-flash" }
 //   )
 
-export { callLLM, render, registerStrategy } from "./llm"
+export { callLLM, render, registerStrategy, registerProvider } from "./llm"
 export type { CallOptions } from "./llm"
 export type {
     JsxAiNode,
@@ -43,3 +44,6 @@ export { nlt } from "./strategies/nlt"
 export { md } from "./jsx-runtime"
 export { Skill, UseSkillTool, parseSkillFile, resolveSkills } from "./skill"
 export type { SkillMeta } from "./skill"
+export { GeminiProvider } from "./providers/gemini"
+export { OpenAIProvider } from "./providers/openai"
+export type { Provider } from "./providers/provider"

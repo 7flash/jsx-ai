@@ -4,13 +4,16 @@
 //   Strategy (provider-agnostic)  →  Provider (Gemini/OpenAI)  →  HTTP
 //
 //   1. strategy.prepare(prompt) → PreparedPrompt  (no API specifics)
-//   2. provider converts PreparedPrompt → API body  (Gemini format)
-//   3. provider parses API response → LLMResponse
-//   4. strategy.parseToolCalls(text) for text-based strategies
+//   2. provider.buildRequest(prepared) → URL + headers + body
+//   3. provider.parseResponse(data) → ProviderResponse
+//   4. strategy.parseResponse(providerResponse) → text + toolCalls
 //
 // Strategies never touch API bodies. Providers never touch tool formatting.
 
-import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse, ToolCall } from "./types"
+import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt } from "./types"
+import type { Provider } from "./providers/provider"
+import { GeminiProvider } from "./providers/gemini"
+import { OpenAIProvider } from "./providers/openai"
 import { extract } from "./render"
 import { native } from "./strategies/native"
 import { xml } from "./strategies/xml"
@@ -21,8 +24,10 @@ import { nlt } from "./strategies/nlt"
 export type { LLMResponse }
 
 export interface CallOptions {
-    /** API key (defaults to GEMINI_API_KEY or GOOGLE_API_KEY env var) */
+    /** API key (defaults to env vars based on provider) */
     apiKey?: string
+    /** Provider to use: "gemini" | "openai". Default: auto-detected from model name */
+    provider?: "gemini" | "openai"
     /** Override the strategy ("native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"). Default: "auto" */
     strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
     /** Override the model */
@@ -34,6 +39,15 @@ export interface CallOptions {
 }
 
 const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybrid, nlt }
+const PROVIDERS: Record<string, Provider> = {
+    gemini: new GeminiProvider(),
+    openai: new OpenAIProvider(),
+}
+
+/** Register a custom provider */
+export function registerProvider(name: string, provider: Provider): void {
+    PROVIDERS[name] = provider
+}
 
 /** Resolve which strategy to use */
 function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStrategy {
@@ -41,11 +55,30 @@ function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStra
     return STRATEGIES[choice] || hybrid
 }
 
-/** Resolve API key from options, env, or config file */
-function resolveApiKey(options?: CallOptions): string {
+/** Detect provider from model name */
+function detectProvider(model: string): string {
+    if (/^(gpt-|o1|o3|o4|chatgpt|dall-e)/i.test(model)) return "openai"
+    return "gemini"
+}
+
+/** Resolve provider instance */
+function resolveProvider(model: string, override?: string): Provider {
+    const name = override || detectProvider(model)
+    const provider = PROVIDERS[name]
+    if (!provider) throw new Error(`Unknown provider: ${name}. Available: ${Object.keys(PROVIDERS).join(", ")}`)
+    return provider
+}
+
+/** Resolve API key from options or env vars */
+function resolveApiKey(provider: Provider, options?: CallOptions): string {
     if (options?.apiKey) return options.apiKey
-    if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY
-    if (process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY
+
+    if (provider.name === "openai") {
+        if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
+    } else {
+        if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY
+        if (process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY
+    }
 
     // Try .config.toml
     try {
@@ -56,83 +89,12 @@ function resolveApiKey(options?: CallOptions): string {
         if (match) return match[1]
     } catch { }
 
-    throw new Error("No API key found. Set GEMINI_API_KEY, pass apiKey option, or add .config.toml")
-}
-
-
-// ═══════════════════════════════════════════════════════════════════
-//   GEMINI PROVIDER
-//   Converts PreparedPrompt ↔ Gemini API format
-// ═══════════════════════════════════════════════════════════════════
-
-function geminiEndpoint(model: string): string {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-}
-
-function geminiHeaders(apiKey: string): Record<string, string> {
-    return {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-    }
-}
-
-/** Convert a PreparedPrompt into Gemini's API body format */
-function toGeminiBody(prepared: PreparedPrompt): any {
-    const body: any = {
-        contents: prepared.messages.map(m => ({
-            role: m.role === "assistant" ? "model" : "user",
-            parts: [{ text: m.content }],
-        })),
-        generationConfig: {
-            temperature: prepared.temperature ?? 0.1,
-            maxOutputTokens: prepared.maxTokens ?? 4000,
-        },
-    }
-
-    if (prepared.system) {
-        body.systemInstruction = { parts: [{ text: prepared.system }] }
-    }
-
-    if (prepared.nativeTools && prepared.nativeTools.length > 0) {
-        body.tools = [{
-            functionDeclarations: prepared.nativeTools.map(t => ({
-                name: t.name,
-                description: t.description,
-                parameters: t.parameters,
-            })),
-        }]
-        body.toolConfig = { functionCallingConfig: { mode: "AUTO" } }
-    }
-
-    return body
-}
-
-/** Normalize a Gemini API response into a ProviderResponse */
-function parseGeminiResponse(data: any): ProviderResponse {
-    const parts = data.candidates?.[0]?.content?.parts || []
-    let text = ""
-    const nativeToolCalls: ToolCall[] = []
-
-    for (const part of parts) {
-        if (part.text) text += part.text
-        if (part.functionCall) {
-            nativeToolCalls.push({
-                name: part.functionCall.name,
-                args: part.functionCall.args || {},
-            })
-        }
-    }
-
-    const usage = data.usageMetadata
-    return {
-        text,
-        nativeToolCalls,
-        raw: data,
-        usage: usage ? {
-            inputTokens: usage.promptTokenCount || 0,
-            outputTokens: usage.candidatesTokenCount || 0,
-        } : undefined,
-    }
+    throw new Error(
+        `No API key found for ${provider.name}. ` +
+        (provider.name === "openai"
+            ? "Set OPENAI_API_KEY or pass apiKey option."
+            : "Set GEMINI_API_KEY, pass apiKey option, or add .config.toml")
+    )
 }
 
 
@@ -142,20 +104,20 @@ function parseGeminiResponse(data: any): ProviderResponse {
 
 /**
  * Call an LLM with a JSX-defined prompt.
- * 
+ *
  * ```tsx
  * const result = await callLLM(
- *   <prompt model="gemini-2.5-flash">
+ *   <>
  *     <system>You are a coding agent</system>
  *     <tool name="exec" description="Run a shell command">
  *       <param name="command" type="string" required>The command to run</param>
  *     </tool>
  *     <message role="user">List the files in the current directory</message>
- *   </prompt>
+ *   </>,
+ *   { model: "gemini-2.5-flash" }
  * )
- * 
+ *
  * result.toolCalls  // [{ name: "exec", args: { command: "ls" } }]
- * result.text       // ""  (native FC returns structured calls, not text)
  * ```
  */
 export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<LLMResponse> {
@@ -167,16 +129,17 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     if (options?.temperature != null) prompt.temperature = options.temperature
     if (options?.maxTokens != null) prompt.maxTokens = options.maxTokens
 
-    // 3. Strategy transforms the prompt (provider-agnostic)
+    // 3. Resolve strategy + provider
     const strategy = resolveStrategy(prompt, options?.strategy)
+    const model = prompt.model || "gemini-2.5-flash"
+    const provider = resolveProvider(model, options?.provider)
+    const apiKey = resolveApiKey(provider, options)
+
+    // 4. Strategy transforms the prompt (provider-agnostic)
     const prepared = strategy.prepare(prompt)
 
-    // 4. Provider converts to API format and sends request
-    const apiKey = resolveApiKey(options)
-    const model = prompt.model || "gemini-2.5-flash"
-    const url = geminiEndpoint(model)
-    const headers = geminiHeaders(apiKey)
-    const body = toGeminiBody(prepared)
+    // 5. Provider builds the request
+    const { url, headers, body } = provider.buildRequest(prepared, model, apiKey)
 
     const res = await fetch(url, {
         method: "POST",
@@ -191,10 +154,10 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
 
     const data = await res.json()
 
-    // 5. Provider normalizes the response
-    const providerResponse = parseGeminiResponse(data)
+    // 6. Provider normalizes the response
+    const providerResponse = provider.parseResponse(data)
 
-    // 6. Strategy parses the normalized response
+    // 7. Strategy parses the normalized response
     const { text, toolCalls } = strategy.parseResponse(providerResponse)
 
     return {
