@@ -1,26 +1,14 @@
 #!/usr/bin/env bun
-// ── jsx-ai Composition Benchmark ──
+// ── jsx-ai Agentic Benchmark ──
 //
-// Demonstrates the core value of jsx-ai: SKILL WRAPPERS as JSX components.
+// Tests the exact pattern smart-agent uses: multi-turn objective management.
 //
-// Just like React wraps UI in <ThemeProvider>, jsx-ai wraps tasks in skills:
+// The agent receives a user request and must:
+//   Turn 1 (Plan):    Define objectives with set_objectives
+//   Turn 2 (Execute): Implement based on discovered context
+//   Turn 3 (Adapt):   Fix issues from test output, update objectives
 //
-//   <BunExpert>
-//     <StrictTypeScript>
-//       <SecurityAware>
-//         <CodeReviewer>
-//           <TestDriven>
-//             <prompt>
-//               <WriteFile /> <ExecTool />
-//               <message role="user">Build a URL shortener</message>
-//             </prompt>
-//           </TestDriven>
-//         </CodeReviewer>
-//       </SecurityAware>
-//     </StrictTypeScript>
-//   </BunExpert>
-//
-// Each wrapper injects methodology. The SAME tree works across strategies.
+// The same JSX-composed prompt is tested across strategies.
 //
 // Run: bgrun jsx-bench --restart
 
@@ -37,102 +25,51 @@ type StrategyName = (typeof STRATEGY_NAMES)[number]
 
 
 // ═══════════════════════════════════════════════════════════════════
-//
-//   SKILL WRAPPERS
-//
-//   Each component wraps children in a methodology — like how
-//   <SystematicDebugging>fix the memory leak</SystematicDebugging>
-//   compiles the task into a full debugging methodology prompt.
-//
+//   SKILL WRAPPERS — inject methodology into any task
 // ═══════════════════════════════════════════════════════════════════
 
-/** Wraps children with Bun runtime expertise */
+function AgentCore({ children }: { children?: any }) {
+    return <>
+        <system>{md`
+            You are an autonomous coding agent. You work in iterations:
+
+            1. PLAN — Analyze the task, break it into objectives, call set_objectives
+            2. EXECUTE — Implement objectives using tools (write_file, exec)
+            3. ADAPT — When results come back, adjust objectives and continue
+
+            ## Rules
+            - ALWAYS call set_objectives before writing any code
+            - Each objective should be specific and verifiable
+            - When you discover new information, UPDATE your objectives
+            - When tests fail, add a fix objective and continue
+            - Call done when ALL objectives are complete
+        `}</system>
+        {children}
+    </>
+}
+
 function BunExpert({ children }: { children?: any }) {
     return <>
         <system>{md`
-            You are an expert Bun runtime developer.
-
-            ## Bun Runtime Knowledge
-            - Use Bun.serve() for HTTP servers — never express, koa, or hono
-            - Use export default { port, fetch } pattern for servers
-            - Database: import { Database } from "bun:sqlite" — always use db.prepare()
+            ## Bun Runtime
+            - HTTP: Bun.serve() with export default { port, fetch } pattern
+            - Database: import { Database } from "bun:sqlite", use db.prepare()
             - Testing: import { describe, it, expect } from "bun:test"
-            - File I/O: Bun.file() for reading, Bun.write() for writing
-            - TypeScript works out of the box — no tsconfig needed
-            - Use bun run {file} to execute, bun test to run tests
+            - File I/O: Bun.file() / Bun.write()
+            - Run: bun run {file}, bun test
         `}</system>
         {children}
     </>
 }
 
-/** Wraps children with strict TypeScript quality constraints */
 function StrictTypeScript({ children }: { children?: any }) {
     return <>
         <system>{md`
-            ## TypeScript Standards (STRICT)
-            - Define interfaces for ALL data shapes — no inline object types
-            - Export all interfaces from a dedicated types.ts file
-            - Import shared types — NEVER duplicate type definitions
-            - NEVER use : any — use proper types, generics, or unknown
-            - NEVER use var — use const (preferred) or let
-            - All public functions MUST have JSDoc comments
-            - Prefer named exports over default exports
-        `}</system>
-        {children}
-    </>
-}
-
-/** Wraps children with security-aware development methodology */
-function SecurityAware({ children }: { children?: any }) {
-    return <>
-        <system>{md`
-            ## Security Methodology
-            - NEVER interpolate user input into SQL — use parameterized queries
-            - NEVER use Math.random() for IDs — use crypto.randomUUID()
-            - Validate and sanitize ALL user input at the API boundary
-            - Validate Content-Type headers before parsing request bodies
-            - Never expose internal error details or stack traces in responses
-            - Use proper HTTP status codes: 400 bad input, 404 not found, 500 server error
-        `}</system>
-        {children}
-    </>
-}
-
-/** Wraps children with code review self-check methodology */
-function CodeReviewer({ children }: { children?: any }) {
-    return <>
-        <system>{md`
-            ## Code Review Methodology
-            When producing code, self-check against these criteria:
-
-            ### Quality Gates
-            - Separation of concerns: types, data layer, server, tests in separate files
-            - No console.log in library code — use proper error handling
-            - Error paths tested — not just happy paths
-            - All imports resolve — don't import from files you haven't created
-            - Functions focused and single-responsibility
-
-            ### Architecture
-            - Data layer exposes clean functions, not raw database queries
-            - Server handlers are thin — delegate to data layer
-            - Types shared via imports, never duplicated
-            - Tests call the public API, not internal details
-        `}</system>
-        {children}
-    </>
-}
-
-/** Wraps children with testing methodology */
-function TestDriven({ children }: { children?: any }) {
-    return <>
-        <system>{md`
-            ## Testing Methodology
-            - Test files named {module}.test.ts, co-located with the module
-            - Each test is independent — no shared mutable state between tests
-            - Test structure: describe blocks grouping related scenarios
-            - Coverage: happy path + error cases + edge cases
-            - For HTTP: test status codes AND response body shapes
-            - Minimum 6 test cases per module
+            ## TypeScript
+            - Define interfaces for all data shapes in types.ts
+            - Import shared types — never duplicate
+            - Never use : any — use proper types
+            - All public functions must have JSDoc
         `}</system>
         {children}
     </>
@@ -140,23 +77,27 @@ function TestDriven({ children }: { children?: any }) {
 
 
 // ═══════════════════════════════════════════════════════════════════
-//
 //   TOOL COMPONENTS
-//
 // ═══════════════════════════════════════════════════════════════════
+
+const SetObjectivesTool = () => (
+    <tool name="set_objectives" description="Define or update the current list of objectives. Call this BEFORE writing any code, and again when objectives change.">
+        <param name="objectives" type="string" required>
+            A numbered list of specific, verifiable objectives. Example:
+            1. Create src/types.ts with Todo and ApiResponse interfaces
+            2. Create src/db.ts with initDb(), addTodo(), getTodos(), toggleTodo()
+            3. Create src/server.ts with CRUD endpoints
+            4. Create src/server.test.ts with 6+ test cases
+            5. Run tests and verify all pass
+        </param>
+        <param name="reasoning" type="string" required>Why these objectives, and any adjustments from previous plan</param>
+    </tool>
+)
 
 const WriteFileTool = () => (
     <tool name="write_file" description="Write content to a file, creating directories as needed">
         <param name="path" type="string" required>Path to write the file</param>
         <param name="content" type="string" required>Full file content to write</param>
-    </tool>
-)
-
-const EditFileTool = () => (
-    <tool name="edit_file" description="Replace an exact string in a file with new content">
-        <param name="path" type="string" required>Path to the file</param>
-        <param name="search" type="string" required>Exact string to find</param>
-        <param name="replace" type="string" required>Replacement string</param>
     </tool>
 )
 
@@ -166,93 +107,229 @@ const ExecTool = () => (
     </tool>
 )
 
-
-// ═══════════════════════════════════════════════════════════════════
-//
-//   THE BENCHMARK — COMPOSED PROMPT
-//
-// ═══════════════════════════════════════════════════════════════════
-
-const EXISTING_TYPES = `/** URL record stored in the database */
-export interface ShortUrl {
-  id: string
-  originalUrl: string
-  shortCode: string
-  createdAt: string
-  clicks: number
-}
-
-/** Request body for POST /api/shorten */
-export interface CreateUrlRequest {
-  url: string
-}
-
-/** Response body for POST /api/shorten */
-export interface CreateUrlResponse {
-  shortUrl: string
-  shortCode: string
-}
-
-/** Standardized error response */
-export interface ErrorResponse {
-  error: string
-  statusCode: number
-}`
-
-const composedPrompt = (
-    <BunExpert>
-        <StrictTypeScript>
-            <SecurityAware>
-                <CodeReviewer>
-                    <TestDriven>
-                        <prompt model={MODEL} temperature={0.1} maxTokens={16000}>
-                            <WriteFileTool />
-                            <EditFileTool />
-                            <ExecTool />
-                            <message role="user">{md`
-                                Here is the existing types file:
-
-                                \`\`\`typescript
-                                // src/types.ts
-                                ${EXISTING_TYPES}
-                                \`\`\`
-                            `}</message>
-                            <message role="user">{md`
-                                Build a URL shortener API. The types are already defined in
-                                src/types.ts — import from there.
-
-                                Create these files using write_file:
-                                1. src/db.ts — Database layer with initDb(), createUrl(), getUrl() using bun:sqlite
-                                2. src/server.ts — HTTP server: POST /api/shorten, GET /s/:code (302 redirect), GET /api/stats/:code, GET /health
-                                3. src/server.test.ts — Tests covering happy paths and error cases
-
-                                Write all tool calls in a single turn.
-                            `}</message>
-                        </prompt>
-                    </TestDriven>
-                </CodeReviewer>
-            </SecurityAware>
-        </StrictTypeScript>
-    </BunExpert>
+const DoneTool = () => (
+    <tool name="done" description="Signal that all objectives are complete">
+        <param name="summary" type="string" required>Summary of what was accomplished</param>
+    </tool>
 )
 
 
 // ═══════════════════════════════════════════════════════════════════
-//   SCORING — each check maps back to a skill wrapper
+//   MULTI-TURN SCENARIO
+//
+//   Simulates the smart-agent agentic loop:
+//     User message → Plan → Execute → Discover → Adapt → Done
 // ═══════════════════════════════════════════════════════════════════
 
-interface ScoreResult {
+const USER_TASK = md`
+    Build a key-value store API with TTL (time-to-live) expiration.
+
+    Requirements:
+    - POST /kv/:key — set a value (body: { value, ttl_seconds? })
+    - GET /kv/:key — get a value (404 if expired or missing)
+    - DELETE /kv/:key — delete a key
+    - GET /kv — list all non-expired keys
+    - Expired keys should be cleaned up automatically
+
+    Use Bun + SQLite for persistence. TypeScript strict mode.
+`
+
+// Context injected between turns (simulating tool results + discoveries)
+const TURN2_INJECTION = md`
+    Objectives accepted.
+
+    I ran \`cat package.json\` and found the project already has:
+    \`\`\`json
+    {
+        "name": "kv-store",
+        "version": "1.0.0",
+        "type": "module",
+        "dependencies": { }
+    }
+    \`\`\`
+
+    I also ran \`ls src/\` — the directory is empty, no existing code.
+
+    Now implement your objectives. Write all files using write_file calls.
+    You can make multiple tool calls in a single turn.
+`
+
+const TURN3_INJECTION = md`
+    Files written. I ran \`bun test\` and got:
+
+    \`\`\`
+    src/server.test.ts:
+    ✓ POST /kv/:key sets a value
+    ✓ GET /kv/:key retrieves a value
+    ✓ GET /kv/:key returns 404 for missing key
+    ✗ GET /kv/:key returns 404 for expired key
+        Expected: 404
+        Received: 200
+        at src/server.test.ts:42:20
+    ✓ DELETE /kv/:key removes a key
+    ✓ GET /kv lists all keys
+
+    5 pass, 1 fail
+    \`\`\`
+
+    The TTL expiration check is not working — expired keys still return
+    200 instead of 404. Fix this bug and update your objectives to reflect
+    the fix. Then call done.
+`
+
+/** Build the Turn 1 prompt (Planning) */
+function buildTurn1() {
+    return (
+        <AgentCore>
+            <BunExpert>
+                <StrictTypeScript>
+                    <prompt model={MODEL} temperature={0.1} maxTokens={8000}>
+                        <SetObjectivesTool />
+                        <WriteFileTool />
+                        <ExecTool />
+                        <DoneTool />
+                        <message role="user">{md`
+                            ${USER_TASK}
+
+                            IMPORTANT: Start by calling set_objectives to define your plan.
+                            Do NOT write any code yet — just plan.
+                        `}</message>
+                    </prompt>
+                </StrictTypeScript>
+            </BunExpert>
+        </AgentCore>
+    )
+}
+
+/** Summarize a turn's tool calls for conversation history */
+function summarizeTurn(result: LLMResponse): string {
+    const parts: string[] = []
+    if (result.text) parts.push(result.text)
+    for (const tc of result.toolCalls) {
+        if (tc.name === "set_objectives") {
+            parts.push(`[Called set_objectives]\n${tc.args.objectives || tc.args.reasoning || ""}`)
+        } else if (tc.name === "write_file") {
+            const preview = (tc.args.content || "").substring(0, 200)
+            parts.push(`[Called write_file: ${tc.args.path}]\n${preview}...`)
+        } else if (tc.name === "exec") {
+            parts.push(`[Called exec: ${tc.args.command}]`)
+        } else if (tc.name === "done") {
+            parts.push(`[Called done: ${tc.args.summary}]`)
+        } else {
+            parts.push(`[Called ${tc.name}]`)
+        }
+    }
+    return parts.join("\n\n")
+}
+
+/** Build the Turn 2 prompt (Execute — includes turn 1 history) */
+function buildTurn2(turn1Result: LLMResponse) {
+    return (
+        <AgentCore>
+            <BunExpert>
+                <StrictTypeScript>
+                    <prompt model={MODEL} temperature={0.1} maxTokens={16000}>
+                        <SetObjectivesTool />
+                        <WriteFileTool />
+                        <ExecTool />
+                        <DoneTool />
+                        <message role="user">{md`
+                            ${USER_TASK}
+
+                            Start by calling set_objectives to define your plan.
+                        `}</message>
+                        <message role="assistant">{summarizeTurn(turn1Result)}</message>
+                        <message role="user">{TURN2_INJECTION}</message>
+                    </prompt>
+                </StrictTypeScript>
+            </BunExpert>
+        </AgentCore>
+    )
+}
+
+/** Build the Turn 3 prompt (Adapt — includes turn 1+2 history) */
+function buildTurn3(turn1Result: LLMResponse, turn2Result: LLMResponse) {
+    return (
+        <AgentCore>
+            <BunExpert>
+                <StrictTypeScript>
+                    <prompt model={MODEL} temperature={0.1} maxTokens={8000}>
+                        <SetObjectivesTool />
+                        <WriteFileTool />
+                        <ExecTool />
+                        <DoneTool />
+                        <message role="user">{md`
+                            ${USER_TASK}
+
+                            Start by calling set_objectives to define your plan.
+                        `}</message>
+                        <message role="assistant">{summarizeTurn(turn1Result)}</message>
+                        <message role="user">{TURN2_INJECTION}</message>
+                        <message role="assistant">{summarizeTurn(turn2Result)}</message>
+                        <message role="user">{TURN3_INJECTION}</message>
+                    </prompt>
+                </StrictTypeScript>
+            </BunExpert>
+        </AgentCore>
+    )
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+//   SCORING — per turn
+// ═══════════════════════════════════════════════════════════════════
+
+interface TurnScore {
+    turn: number
     checks: Record<string, boolean>
-    qualityScore: number
+    score: number
+    maxScore: number
     details: string
 }
 
-function score(result: LLMResponse): ScoreResult {
+function scoreTurn1(result: LLMResponse): TurnScore {
+    const calls = result.toolCalls
+    const objectives = calls.find(c => c.name === "set_objectives")
+    const objText = objectives?.args.objectives || ""
+    const reasoning = objectives?.args.reasoning || ""
+
+    const checks: Record<string, boolean> = {
+        "called_set_objectives": !!objectives,
+        "has_reasoning": reasoning.length > 20,
+        "3+_objectives": (objText.match(/^\d+\./gm) || []).length >= 3,
+        "mentions_types": /types|interface/i.test(objText),
+        "mentions_db": /db|database|sqlite/i.test(objText),
+        "mentions_server": /server|api|endpoint/i.test(objText),
+        "mentions_tests": /test/i.test(objText),
+        "mentions_ttl": /ttl|expir/i.test(objText),
+        "no_premature_write": !calls.some(c => c.name === "write_file"),
+        "no_premature_exec": !calls.some(c => c.name === "exec"),
+    }
+
+    const weights: Record<string, number> = {
+        called_set_objectives: 15,
+        has_reasoning: 5,
+        "3+_objectives": 10,
+        mentions_types: 5,
+        mentions_db: 5,
+        mentions_server: 5,
+        mentions_tests: 5,
+        mentions_ttl: 8,
+        no_premature_write: 8,
+        no_premature_exec: 4,
+    }
+
+    return computeScore(1, checks, weights)
+}
+
+function scoreTurn2(result: LLMResponse): TurnScore {
     const calls = result.toolCalls
     const writes = calls.filter(c => c.name === "write_file")
-
+    const allCode = writes.map(c => c.args.content || "").join("\n")
     const dbFile = writes.find(c => (c.args.path || "").includes("db"))
-    const serverFile = writes.find(c => (c.args.path || "").includes("server") && !(c.args.path || "").includes("test"))
+    const serverFile = writes.find(c =>
+        (c.args.path || "").includes("server") && !(c.args.path || "").includes("test")
+    )
     const testFile = writes.find(c => (c.args.path || "").includes("test"))
     const typesFile = writes.find(c => (c.args.path || "").includes("types"))
 
@@ -261,56 +338,84 @@ function score(result: LLMResponse): ScoreResult {
     const testCode = testFile?.args.content || ""
 
     const checks: Record<string, boolean> = {
-        // File structure
-        "writes_db": !!dbFile,
-        "writes_server": !!serverFile,
-        "writes_tests": !!testFile,
-        "no_types_rewrite": !typesFile,
-
-        // BunExpert
+        "writes_3+_files": writes.length >= 3,
+        "creates_types": !!typesFile,
+        "creates_db": !!dbFile,
+        "creates_server": !!serverFile,
+        "creates_tests": !!testFile,
         "uses_bun_sqlite": /bun:sqlite/.test(dbCode),
         "uses_bun_serve": /Bun\.serve|export\s+default/.test(serverCode),
-        "uses_bun_test": /from\s*["']bun:test["']/.test(testCode),
-
-        // StrictTypeScript
-        "imports_types": /from\s*["']\.\/types/.test(dbCode) || /from\s*["']\.\/types/.test(serverCode),
-        "has_jsdoc": /\/\*\*[\s\S]*?\*\//.test(dbCode) || /\/\*\*[\s\S]*?\*\//.test(serverCode),
-        "no_any": !/:\s*any\b/.test(dbCode + serverCode),
-        "no_var": !/\bvar\s/.test(dbCode + serverCode + testCode),
-
-        // SecurityAware
+        "uses_bun_test": /bun:test/.test(testCode),
+        "imports_types": /from\s*["']\.\/(types|\.\/types)/.test(allCode),
         "uses_prepared_stmt": /\.prepare\(/.test(dbCode),
-        "uses_uuid": /randomUUID|crypto/.test(dbCode),
-        "validates_input": /Content-Type|valid|!.*url/i.test(serverCode),
-
-        // CodeReviewer
-        "server_imports_db": /from\s*["']\.\/db/.test(serverCode),
-        "no_console_log": !/console\.log\(/.test(dbCode + serverCode),
-        "separation_of_concerns": !!dbFile && !!serverFile,
-
-        // TestDriven
-        "has_describe": /describe\s*\(/.test(testCode),
-        "has_6_plus_tests": (testCode.match(/(?:it|test)\s*\(/g) || []).length >= 5,
-        "tests_errors": /400|404|invalid|error|not.?found/i.test(testCode),
-
-        // Routes
-        "has_shorten": /shorten/i.test(serverCode),
-        "has_redirect": /302|redirect/i.test(serverCode),
-        "has_stats": /stats/i.test(serverCode),
-        "has_health": /health/i.test(serverCode),
-        "has_404": /404/.test(serverCode),
+        "has_ttl_column": /ttl|expir|created_at/i.test(dbCode),
+        "has_kv_endpoints": /\/kv/.test(serverCode),
+        "has_5+_tests": (testCode.match(/(?:it|test)\s*\(/g) || []).length >= 5,
+        "no_any": !/:\s*any\b/.test(allCode),
     }
 
     const weights: Record<string, number> = {
-        writes_db: 8, writes_server: 8, writes_tests: 8, no_types_rewrite: 4,
-        uses_bun_sqlite: 5, uses_bun_serve: 4, uses_bun_test: 3,
-        imports_types: 5, has_jsdoc: 3, no_any: 4, no_var: 2,
-        uses_prepared_stmt: 5, uses_uuid: 4, validates_input: 3,
-        server_imports_db: 4, no_console_log: 3, separation_of_concerns: 3,
-        has_describe: 2, has_6_plus_tests: 4, tests_errors: 3,
-        has_shorten: 3, has_redirect: 3, has_stats: 2, has_health: 2, has_404: 2,
+        "writes_3+_files": 10,
+        creates_types: 5,
+        creates_db: 8,
+        creates_server: 8,
+        creates_tests: 8,
+        uses_bun_sqlite: 5,
+        uses_bun_serve: 4,
+        uses_bun_test: 3,
+        imports_types: 5,
+        uses_prepared_stmt: 5,
+        has_ttl_column: 6,
+        has_kv_endpoints: 4,
+        "has_5+_tests": 5,
+        no_any: 4,
     }
 
+    return computeScore(2, checks, weights)
+}
+
+function scoreTurn3(result: LLMResponse): TurnScore {
+    const calls = result.toolCalls
+    const writes = calls.filter(c => c.name === "write_file")
+    const objectives = calls.find(c => c.name === "set_objectives")
+    const done = calls.find(c => c.name === "done")
+    const allContent = [
+        result.text,
+        ...calls.map(c => JSON.stringify(c.args)),
+    ].join(" ")
+
+    const checks: Record<string, boolean> = {
+        "addresses_ttl_bug": /ttl|expir|expired|404|timestamp|Date\.now|time/i.test(allContent),
+        "writes_fix": writes.length > 0,
+        "fix_touches_db_or_server": writes.some(c =>
+            /db|server/.test(c.args.path || "")
+        ),
+        "updates_objectives": !!objectives,
+        "fix_mentions_expiry_check": /expir|ttl.*check|Date\.now|created_at\s*\+\s*ttl|WHERE/i.test(
+            writes.map(c => c.args.content || "").join("\n")
+        ),
+        "calls_done": !!done,
+        "done_has_summary": (done?.args.summary || "").length > 10,
+    }
+
+    const weights: Record<string, number> = {
+        addresses_ttl_bug: 10,
+        writes_fix: 10,
+        fix_touches_db_or_server: 8,
+        updates_objectives: 8,
+        fix_mentions_expiry_check: 10,
+        calls_done: 6,
+        done_has_summary: 3,
+    }
+
+    return computeScore(3, checks, weights)
+}
+
+function computeScore(
+    turn: number,
+    checks: Record<string, boolean>,
+    weights: Record<string, number>,
+): TurnScore {
     let points = 0, max = 0
     const details: string[] = []
     for (const [name, passed] of Object.entries(checks)) {
@@ -319,8 +424,13 @@ function score(result: LLMResponse): ScoreResult {
         if (passed) points += w
         details.push(`${passed ? "✓" : "✗"} ${name}`)
     }
-
-    return { checks, qualityScore: max > 0 ? Math.round(points / max * 100) : 0, details: details.join(", ") }
+    return {
+        turn,
+        checks,
+        score: max > 0 ? Math.round(points / max * 100) : 0,
+        maxScore: max,
+        details: details.join(", "),
+    }
 }
 
 
@@ -334,31 +444,24 @@ mkdirSync(logDir, { recursive: true })
 configure({ maxResultLength: 400 })
 
 function writeLog(
-    strategy: string, iter: number,
-    result: LLMResponse | null,
-    latencyMs: number, scoreResult?: ScoreResult, error?: string,
+    strategy: string, turn: number, iter: number,
+    result: LLMResponse | null, latencyMs: number,
+    turnScore?: TurnScore, error?: string,
 ) {
-    const filename = `${logDir}/${strategy}_${iter + 1}.txt`
+    const filename = `${logDir}/${strategy}_iter${iter + 1}_turn${turn}.txt`
     const lines: string[] = [
-        `═══ ${strategy} #${iter + 1} ═══  ${MODEL}  ${new Date().toISOString()}  ${latencyMs.toFixed(0)}ms`, ``
+        `═══ ${strategy} iter#${iter + 1} turn#${turn} ═══  ${MODEL}  ${new Date().toISOString()}  ${latencyMs.toFixed(0)}ms`, ``
     ]
 
-    // Log from the request attached to the response
     const body = result?.request?.body
     if (body?.systemInstruction?.parts?.[0]?.text) {
-        lines.push(`─── SYSTEM ───`, body.systemInstruction.parts[0].text, ``)
-    }
-    if (body?.tools) {
-        lines.push(`─── TOOLS (native FC) ───`)
-        for (const fd of body.tools?.[0]?.functionDeclarations || [])
-            lines.push(`  ${fd.name}: ${fd.description?.substring(0, 80)}`)
-        lines.push(``)
+        lines.push(`─── SYSTEM ───`, body.systemInstruction.parts[0].text.substring(0, 2000), ``)
     }
     if (body?.contents) {
-        lines.push(`─── MESSAGES ───`)
+        lines.push(`─── MESSAGES (${body.contents.length}) ───`)
         for (const c of body.contents) {
             const text = c.parts?.map((p: any) => p.text || `[FC: ${JSON.stringify(p.functionCall)}]`).join("") || ""
-            lines.push(`[${c.role}]: ${text.substring(0, 8000)}${text.length > 8000 ? "…" : ""}`)
+            lines.push(`[${c.role}]: ${text.substring(0, 4000)}${text.length > 4000 ? "…" : ""}`)
         }
         lines.push(``)
     }
@@ -378,8 +481,8 @@ function writeLog(
         }
         lines.push(`Tokens: ${result.usage?.inputTokens || "?"} in → ${result.usage?.outputTokens || "?"} out`)
     }
-    if (scoreResult) {
-        lines.push(``, `─── SCORE: ${scoreResult.qualityScore}% ───`, scoreResult.details)
+    if (turnScore) {
+        lines.push(``, `─── TURN ${turn} SCORE: ${turnScore.score}% ───`, turnScore.details)
     }
     lines.push(``)
     Bun.write(filename, lines.join("\n"))
@@ -387,62 +490,152 @@ function writeLog(
 
 
 interface RunResult {
-    strategy: string; iter: number; latencyMs: number
-    inputTokens: number; outputTokens: number; toolCalls: number
-    score: ScoreResult
+    strategy: string
+    iter: number
+    turns: {
+        turn: number
+        latencyMs: number
+        inputTokens: number
+        outputTokens: number
+        toolCalls: number
+        score: TurnScore
+    }[]
+    totalScore: number
 }
 
+async function runIteration(
+    strategyName: StrategyName,
+    iter: number,
+    m: (label: string, fn: () => Promise<string>) => Promise<string>,
+): Promise<RunResult> {
+    const opts: CallOptions = { strategy: strategyName }
+    const turns: RunResult["turns"] = []
+
+    // ── Turn 1: Plan ──
+    let turn1Result!: LLMResponse
+    await m(`${strategyName}#${iter + 1}/plan`, async () => {
+        const start = Date.now()
+        try {
+            turn1Result = await callLLM(buildTurn1(), opts)
+            const latencyMs = Date.now() - start
+            const s = scoreTurn1(turn1Result)
+            writeLog(strategyName, 1, iter, turn1Result, latencyMs, s)
+            turns.push({
+                turn: 1, latencyMs,
+                inputTokens: turn1Result.usage?.inputTokens || 0,
+                outputTokens: turn1Result.usage?.outputTokens || 0,
+                toolCalls: turn1Result.toolCalls.length,
+                score: s,
+            })
+            return `plan:${s.score}% ${latencyMs.toFixed(0)}ms tools:${turn1Result.toolCalls.length}`
+        } catch (e: any) {
+            writeLog(strategyName, 1, iter, null, Date.now() - start, undefined, e.message)
+            turns.push({ turn: 1, latencyMs: 0, inputTokens: 0, outputTokens: 0, toolCalls: 0, score: { turn: 1, checks: {}, score: 0, maxScore: 0, details: "ERROR" } })
+            return "ERROR"
+        }
+    })
+    await new Promise(r => setTimeout(r, 500))
+
+    // ── Turn 2: Execute ──
+    let turn2Result!: LLMResponse
+    await m(`${strategyName}#${iter + 1}/exec`, async () => {
+        const start = Date.now()
+        try {
+            turn2Result = await callLLM(buildTurn2(turn1Result), opts)
+            const latencyMs = Date.now() - start
+            const s = scoreTurn2(turn2Result)
+            writeLog(strategyName, 2, iter, turn2Result, latencyMs, s)
+            turns.push({
+                turn: 2, latencyMs,
+                inputTokens: turn2Result.usage?.inputTokens || 0,
+                outputTokens: turn2Result.usage?.outputTokens || 0,
+                toolCalls: turn2Result.toolCalls.length,
+                score: s,
+            })
+            return `exec:${s.score}% ${latencyMs.toFixed(0)}ms tools:${turn2Result.toolCalls.length}`
+        } catch (e: any) {
+            writeLog(strategyName, 2, iter, null, Date.now() - start, undefined, e.message)
+            turns.push({ turn: 2, latencyMs: 0, inputTokens: 0, outputTokens: 0, toolCalls: 0, score: { turn: 2, checks: {}, score: 0, maxScore: 0, details: "ERROR" } })
+            return "ERROR"
+        }
+    })
+    await new Promise(r => setTimeout(r, 500))
+
+    // ── Turn 3: Adapt ──
+    await m(`${strategyName}#${iter + 1}/adapt`, async () => {
+        const start = Date.now()
+        try {
+            const turn3Result = await callLLM(buildTurn3(turn1Result, turn2Result), opts)
+            const latencyMs = Date.now() - start
+            const s = scoreTurn3(turn3Result)
+            writeLog(strategyName, 3, iter, turn3Result, latencyMs, s)
+            turns.push({
+                turn: 3, latencyMs,
+                inputTokens: turn3Result.usage?.inputTokens || 0,
+                outputTokens: turn3Result.usage?.outputTokens || 0,
+                toolCalls: turn3Result.toolCalls.length,
+                score: s,
+            })
+            return `adapt:${s.score}% ${latencyMs.toFixed(0)}ms tools:${turn3Result.toolCalls.length}`
+        } catch (e: any) {
+            writeLog(strategyName, 3, iter, null, Date.now() - start, undefined, e.message)
+            turns.push({ turn: 3, latencyMs: 0, inputTokens: 0, outputTokens: 0, toolCalls: 0, score: { turn: 3, checks: {}, score: 0, maxScore: 0, details: "ERROR" } })
+            return "ERROR"
+        }
+    })
+
+    const totalScore = turns.length > 0
+        ? Math.round(turns.reduce((s, t) => s + t.score.score, 0) / turns.length)
+        : 0
+
+    return { strategy: strategyName, iter, turns, totalScore }
+}
+
+
 async function main() {
-    await measure("JSX Composition Benchmark", async (m) => {
+    await measure("Agentic Benchmark", async (m) => {
         const results: RunResult[] = []
 
         await m("Setup", async () =>
-            `${MODEL} × ${ITERATIONS}it × ${STRATEGY_NAMES.length} strategies → ${logDir}/`
+            `${MODEL} × ${ITERATIONS}it × ${STRATEGY_NAMES.length} strategies × 3 turns → ${logDir}/`
         )
 
         for (let i = 0; i < ITERATIONS; i++) {
             for (const strategyName of STRATEGY_NAMES) {
-                await m(`${strategyName}#${i + 1}`, async () => {
-                    const start = Date.now()
-                    try {
-                        const result = await callLLM(composedPrompt, {
-                            strategy: strategyName,
-                        })
-                        const latencyMs = Date.now() - start
-                        const s = score(result)
-                        writeLog(strategyName, i, result, latencyMs, s)
-                        results.push({
-                            strategy: strategyName, iter: i, latencyMs,
-                            inputTokens: result.usage?.inputTokens || 0,
-                            outputTokens: result.usage?.outputTokens || 0,
-                            toolCalls: result.toolCalls.length,
-                            score: s,
-                        })
-                        return `q:${s.qualityScore}% ${latencyMs.toFixed(0)}ms ${result.usage?.inputTokens}→${result.usage?.outputTokens}tok tools:${result.toolCalls.length}`
-                    } catch (e: any) {
-                        const latencyMs = Date.now() - start
-                        writeLog(strategyName, i, null, latencyMs, undefined, e.message)
-                        results.push({
-                            strategy: strategyName, iter: i, latencyMs: 0,
-                            inputTokens: 0, outputTokens: 0, toolCalls: 0,
-                            score: { checks: {}, qualityScore: 0, details: "ERROR" },
-                        })
-                        return "ERROR"
-                    }
-                })
+                const result = await runIteration(strategyName, i, m)
+                results.push(result)
                 await new Promise(r => setTimeout(r, 800))
             }
         }
 
         return await m("Summary", async () => {
-            const lines: string[] = [``, `── URL Shortener (BunExpert > StrictTS > Security > CodeReviewer > TestDriven) ──`]
+            const lines: string[] = [``, `── KV Store: AgentCore > BunExpert > StrictTS — 3-turn agentic loop ──`]
             for (const name of STRATEGY_NAMES) {
-                const v = results.filter(r => r.strategy === name && r.latencyMs > 0)
+                const v = results.filter(r => r.strategy === name && r.turns.length > 0)
                 const n = v.length
                 if (!n) { lines.push(`  ${name}: no results`); continue }
-                lines.push(`  ${name}: quality=${(v.reduce((s, r) => s + r.score.qualityScore, 0) / n).toFixed(0)}% lat=${(v.reduce((s, r) => s + r.latencyMs, 0) / n / 1000).toFixed(1)}s out=${(v.reduce((s, r) => s + r.outputTokens, 0) / n).toFixed(0)}tok tools=${(v.reduce((s, r) => s + r.toolCalls, 0) / n).toFixed(1)}`)
+
+                const avgTotal = (v.reduce((s, r) => s + r.totalScore, 0) / n).toFixed(0)
+                const byTurn = [1, 2, 3].map(t => {
+                    const turnData = v.flatMap(r => r.turns.filter(tt => tt.turn === t))
+                    const avgScore = turnData.length
+                        ? (turnData.reduce((s, tt) => s + tt.score.score, 0) / turnData.length).toFixed(0)
+                        : "?"
+                    return `t${t}=${avgScore}%`
+                }).join(" ")
+
+                const totalLat = v.reduce((s, r) => s + r.turns.reduce((ss, t) => ss + t.latencyMs, 0), 0) / n
+                const totalOut = v.reduce((s, r) => s + r.turns.reduce((ss, t) => ss + t.outputTokens, 0), 0) / n
+
+                lines.push(`  ${name}: total=${avgTotal}% [${byTurn}] lat=${(totalLat / 1000).toFixed(1)}s out=${totalOut.toFixed(0)}tok`)
             }
-            const out = { runId, timestamp: new Date().toISOString(), model: MODEL, iterations: ITERATIONS, strategies: [...STRATEGY_NAMES], logDir, results }
+
+            const out = {
+                runId, timestamp: new Date().toISOString(),
+                model: MODEL, iterations: ITERATIONS,
+                strategies: [...STRATEGY_NAMES],
+                turns: 3, logDir, results,
+            }
             await Bun.write(`${logDir}/results.json`, JSON.stringify(out, null, 2))
             await Bun.write("bench/results.json", JSON.stringify(out, null, 2))
             return lines.join("\n")
