@@ -10,7 +10,7 @@
 //
 // Strategies never touch API bodies. Providers never touch tool formatting.
 
-import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "./types"
+import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse, ToolCall } from "./types"
 import { extract } from "./render"
 import { native } from "./strategies/native"
 import { xml } from "./strategies/xml"
@@ -107,8 +107,8 @@ function toGeminiBody(prepared: PreparedPrompt): any {
     return body
 }
 
-/** Extract text and native tool calls from a Gemini API response */
-function parseGeminiResponse(data: any): { text: string; nativeToolCalls: ToolCall[] } {
+/** Normalize a Gemini API response into a ProviderResponse */
+function parseGeminiResponse(data: any): ProviderResponse {
     const parts = data.candidates?.[0]?.content?.parts || []
     let text = ""
     const nativeToolCalls: ToolCall[] = []
@@ -123,16 +123,16 @@ function parseGeminiResponse(data: any): { text: string; nativeToolCalls: ToolCa
         }
     }
 
-    return { text, nativeToolCalls }
-}
-
-/** Extract usage metadata from a Gemini response */
-function parseGeminiUsage(data: any): LLMResponse["usage"] {
     const usage = data.usageMetadata
-    return usage ? {
-        inputTokens: usage.promptTokenCount || 0,
-        outputTokens: usage.candidatesTokenCount || 0,
-    } : undefined
+    return {
+        text,
+        nativeToolCalls,
+        raw: data,
+        usage: usage ? {
+            inputTokens: usage.promptTokenCount || 0,
+            outputTokens: usage.candidatesTokenCount || 0,
+        } : undefined,
+    }
 }
 
 
@@ -191,20 +191,18 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
 
     const data = await res.json()
 
-    // 5. Provider parses response
-    const { text, nativeToolCalls } = parseGeminiResponse(data)
+    // 5. Provider normalizes the response
+    const providerResponse = parseGeminiResponse(data)
 
-    // 6. Tool calls: use native FC if available, otherwise strategy parses from text
-    const toolCalls = nativeToolCalls.length > 0
-        ? nativeToolCalls
-        : (strategy.parseToolCalls?.(text) ?? [])
+    // 6. Strategy parses the normalized response
+    const { text, toolCalls } = strategy.parseResponse(providerResponse)
 
     return {
         text,
         toolCalls,
         raw: data,
         request: { url, body },
-        usage: parseGeminiUsage(data),
+        usage: providerResponse.usage,
     }
 }
 

@@ -116,6 +116,20 @@ export interface ToolCall {
     args: Record<string, any>
 }
 
+/** Provider-normalized response — what the provider hands to the strategy */
+export interface ProviderResponse {
+    /** All text content from the response */
+    text: string
+    /** Tool calls extracted by the provider's native FC mechanism (if any) */
+    nativeToolCalls: ToolCall[]
+    /** Raw API response for logging/debugging */
+    raw: any
+    usage?: {
+        inputTokens: number
+        outputTokens: number
+    }
+}
+
 export interface LLMResponse {
     text: string
     toolCalls: ToolCall[]
@@ -129,12 +143,12 @@ export interface LLMResponse {
 
 // ── Strategy interface ──
 // Strategies are PROVIDER-AGNOSTIC. They transform the prompt shape
-// and parse tool calls from text — but never build API-specific bodies.
+// and parse the response — but never build API-specific bodies.
 
 export interface RenderStrategy {
     name: string
     /** Transform extracted prompt into provider-agnostic prepared prompt */
     prepare(prompt: ExtractedPrompt): PreparedPrompt
-    /** Parse tool calls from response text (for text-based strategies: xml, natural, nlt) */
-    parseToolCalls?(text: string): ToolCall[]
+    /** Parse the normalized provider response into text + tool calls */
+    parseResponse(response: ProviderResponse): { text: string; toolCalls: ToolCall[] }
 }

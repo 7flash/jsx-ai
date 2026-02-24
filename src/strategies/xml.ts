@@ -3,7 +3,7 @@
 // The model responds with XML that we parse.
 // This gives the LLM maximum structure to work with.
 
-import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "../types"
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse, ToolCall } from "../types"
 
 /** Build the full XML prompt document — system, tools, and conversation */
 function buildXMLDocument(prompt: ExtractedPrompt): string {
@@ -67,64 +67,74 @@ function escapeXml(text: string): string {
         .replace(/"/g, "&quot;")
 }
 
+/** Parse tool calls from XML text */
+function parseXMLToolCalls(text: string): ToolCall[] {
+    const calls: ToolCall[] = []
+
+    // Match <call tool="name">...</call> blocks
+    const callRegex = /<call\s+tool="([^"]+)">([\s\S]*?)<\/call>/g
+    let match
+    while ((match = callRegex.exec(text)) !== null) {
+        const toolName = match[1].trim()
+        const body = match[2]
+        const args: Record<string, any> = {}
+
+        const paramRegex = /<param\s+name="([^"]+)">([\s\S]*?)<\/param>/g
+        let pm
+        while ((pm = paramRegex.exec(body)) !== null) {
+            args[pm[1].trim()] = pm[2].trim()
+        }
+        calls.push({ name: toolName, args })
+    }
+
+    // Fallback: legacy <invocation> format
+    if (calls.length === 0) {
+        const invocationRegex = /<invocation>([\s\S]*?)<\/invocation>/g
+        while ((match = invocationRegex.exec(text)) !== null) {
+            const block = match[1]
+            const toolMatch = block.match(/<tool>([\s\S]*?)<\/tool>/)
+            const paramsMatch = block.match(/<params>([\s\S]*?)<\/params>/)
+
+            if (toolMatch) {
+                const args: Record<string, any> = {}
+                if (paramsMatch) {
+                    const paramRegex = /<(\w+)>([\s\S]*?)<\/\1>/g
+                    let pm
+                    while ((pm = paramRegex.exec(paramsMatch[1])) !== null) {
+                        args[pm[1]] = pm[2].trim()
+                    }
+                }
+                calls.push({ name: toolMatch[1].trim(), args })
+            }
+        }
+    }
+
+    return calls
+}
+
 export const xml: RenderStrategy = {
     name: "xml",
 
     prepare(prompt: ExtractedPrompt): PreparedPrompt {
-        // The entire prompt is one XML document — sent as a single user message
         const xmlDocument = buildXMLDocument(prompt)
 
         return {
-            // No system — everything is in the XML document
             messages: [{ role: "user", content: xmlDocument }],
-            // No native tools — tools are embedded in XML
             temperature: prompt.temperature,
             maxTokens: prompt.maxTokens,
         }
     },
 
-    parseToolCalls(text: string): ToolCall[] {
-        const calls: ToolCall[] = []
+    parseResponse(response: ProviderResponse) {
+        const text = response.text
 
-        // Match <call tool="name">...</call> blocks
-        const callRegex = /<call\s+tool="([^"]+)">([\s\S]*?)<\/call>/g
-        let match
-        while ((match = callRegex.exec(text)) !== null) {
-            const toolName = match[1].trim()
-            const body = match[2]
-            const args: Record<string, any> = {}
+        // Extract message from <message> tag
+        const msgMatch = text.match(/<message>([\s\S]*?)<\/message>/)
+        const message = msgMatch ? msgMatch[1].trim() : text.replace(/<[^>]+>/g, "").trim()
 
-            // Parse <param name="key">value</param>
-            const paramRegex = /<param\s+name="([^"]+)">([\s\S]*?)<\/param>/g
-            let pm
-            while ((pm = paramRegex.exec(body)) !== null) {
-                args[pm[1].trim()] = pm[2].trim()
-            }
-            calls.push({ name: toolName, args })
+        return {
+            text: message,
+            toolCalls: parseXMLToolCalls(text),
         }
-
-        // Fallback: legacy <invocation> format
-        if (calls.length === 0) {
-            const invocationRegex = /<invocation>([\s\S]*?)<\/invocation>/g
-            while ((match = invocationRegex.exec(text)) !== null) {
-                const block = match[1]
-                const toolMatch = block.match(/<tool>([\s\S]*?)<\/tool>/)
-                const paramsMatch = block.match(/<params>([\s\S]*?)<\/params>/)
-
-                if (toolMatch) {
-                    const args: Record<string, any> = {}
-                    if (paramsMatch) {
-                        const paramRegex = /<(\w+)>([\s\S]*?)<\/\1>/g
-                        let pm
-                        while ((pm = paramRegex.exec(paramsMatch[1])) !== null) {
-                            args[pm[1]] = pm[2].trim()
-                        }
-                    }
-                    calls.push({ name: toolMatch[1].trim(), args })
-                }
-            }
-        }
-
-        return calls
     },
 }

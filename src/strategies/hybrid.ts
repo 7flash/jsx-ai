@@ -3,7 +3,7 @@
 // highest 1st-tool accuracy) + natural language system prompt hints (better
 // reasoning and multi-tool batching).
 
-import type { RenderStrategy, ExtractedPrompt, PreparedPrompt } from "../types"
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse } from "../types"
 
 export const hybrid: RenderStrategy = {
     name: "hybrid",
@@ -27,12 +27,17 @@ export const hybrid: RenderStrategy = {
                 role: m.role === "system" ? "user" as const : m.role as "user" | "assistant",
                 content: m.content,
             })),
-            // Tools go through native FC — the provider handles the format
             nativeTools: prompt.tools.length > 0 ? prompt.tools : undefined,
             temperature: prompt.temperature,
             maxTokens: prompt.maxTokens,
         }
     },
 
-    // Native FC — tool calls are parsed by the provider, not the strategy
+    parseResponse(response: ProviderResponse) {
+        // Hybrid uses native FC — pass through the provider's structured calls
+        return {
+            text: response.text,
+            toolCalls: response.nativeToolCalls,
+        }
+    },
 }

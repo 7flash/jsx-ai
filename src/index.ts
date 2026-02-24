@@ -29,6 +29,7 @@ export type {
     ExtractedMessage,
     ExtractedPrompt,
     PreparedPrompt,
+    ProviderResponse,
     ToolCall,
     LLMResponse,
     RenderStrategy,

@@ -274,8 +274,19 @@ describe("native strategy", () => {
         expect(prepared.messages[0].content).toBe("Run ls")
     })
 
-    test("native has no parseToolCalls (provider handles FC)", () => {
-        expect(native.parseToolCalls).toBeUndefined()
+    test("parseResponse uses native FC tool calls from provider", () => {
+        const result = native.parseResponse({
+            text: "I'll run the command.",
+            nativeToolCalls: [
+                { name: "exec", args: { cmd: "ls -la" } },
+            ],
+            raw: {},
+            usage: { inputTokens: 100, outputTokens: 10 },
+        })
+        expect(result.text).toBe("I'll run the command.")
+        expect(result.toolCalls.length).toBe(1)
+        expect(result.toolCalls[0].name).toBe("exec")
+        expect(result.toolCalls[0].args.cmd).toBe("ls -la")
     })
 })
 
@@ -315,24 +326,29 @@ describe("xml strategy", () => {
         expect(text).toContain("<response_format>")
     })
 
-    test("parseToolCalls: new-format <call> tags", () => {
-        const text = `<response>
+    test("parseResponse: new-format <call> tags", () => {
+        const result = xml.parseResponse({
+            text: `<response>
   <message>I'll list the files</message>
   <tool_calls>
     <call tool="exec">
       <param name="cmd">ls -la</param>
     </call>
   </tool_calls>
-</response>`
+</response>`,
+            nativeToolCalls: [],
+            raw: {},
+        })
 
-        const calls = xml.parseToolCalls(text)
-        expect(calls.length).toBe(1)
-        expect(calls[0].name).toBe("exec")
-        expect(calls[0].args.cmd).toBe("ls -la")
+        expect(result.text).toBe("I'll list the files")
+        expect(result.toolCalls.length).toBe(1)
+        expect(result.toolCalls[0].name).toBe("exec")
+        expect(result.toolCalls[0].args.cmd).toBe("ls -la")
     })
 
-    test("parseToolCalls: legacy <invocation> format", () => {
-        const text = `<response>
+    test("parseResponse: legacy <invocation> format", () => {
+        const result = xml.parseResponse({
+            text: `<response>
   <message>Reading and searching</message>
   <tool_invocations>
     <invocation>
@@ -344,18 +360,21 @@ describe("xml strategy", () => {
       <params><pattern>*.test.ts</pattern><path>src</path></params>
     </invocation>
   </tool_invocations>
-</response>`
+</response>`,
+            nativeToolCalls: [],
+            raw: {},
+        })
 
-        const calls = xml.parseToolCalls(text)
-        expect(calls.length).toBe(2)
-        expect(calls[0].name).toBe("read_file")
-        expect(calls[0].args.path).toBe("src/app.ts")
-        expect(calls[1].name).toBe("search")
-        expect(calls[1].args.pattern).toBe("*.test.ts")
+        expect(result.toolCalls.length).toBe(2)
+        expect(result.toolCalls[0].name).toBe("read_file")
+        expect(result.toolCalls[0].args.path).toBe("src/app.ts")
+        expect(result.toolCalls[1].name).toBe("search")
+        expect(result.toolCalls[1].args.pattern).toBe("*.test.ts")
     })
 
-    test("parseToolCalls: multiple new-format calls", () => {
-        const text = `<response>
+    test("parseResponse: multiple new-format calls", () => {
+        const result = xml.parseResponse({
+            text: `<response>
   <message>Creating files</message>
   <tool_calls>
     <call tool="write_file">
@@ -367,27 +386,16 @@ describe("xml strategy", () => {
       <param name="content">import { expect } from "bun:test"</param>
     </call>
   </tool_calls>
-</response>`
+</response>`,
+            nativeToolCalls: [],
+            raw: {},
+        })
 
-        const calls = xml.parseToolCalls(text)
-        expect(calls.length).toBe(2)
-        expect(calls[0].name).toBe("write_file")
-        expect(calls[0].args.path).toBe("src/server.ts")
-        expect(calls[1].name).toBe("write_file")
-        expect(calls[1].args.path).toBe("src/test.ts")
-    })
-
-    test("parseToolCalls: multi-part text", () => {
-        const text = `<response>
-  <message>Part 1</message>  <tool_calls>
-    <call tool="exec">
-      <param name="cmd">ls</param>
-    </call>  </tool_calls>
-</response>`
-
-        const calls = xml.parseToolCalls(text)
-        expect(calls.length).toBe(1)
-        expect(calls[0].name).toBe("exec")
+        expect(result.toolCalls.length).toBe(2)
+        expect(result.toolCalls[0].name).toBe("write_file")
+        expect(result.toolCalls[0].args.path).toBe("src/server.ts")
+        expect(result.toolCalls[1].name).toBe("write_file")
+        expect(result.toolCalls[1].args.path).toBe("src/test.ts")
     })
 })
 

@@ -32,7 +32,7 @@
 //
 //   Assessment finished.
 
-import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "../types"
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse, ToolCall } from "../types"
 
 /** Build NLT-style system prompt following the paper's 5-component template */
 function buildNLTSystemPrompt(prompt: ExtractedPrompt): string {
@@ -230,7 +230,10 @@ export const nlt: RenderStrategy = {
         }
     },
 
-    parseToolCalls(text: string): ToolCall[] {
-        return parseNLTToolCalls(text)
+    parseResponse(response: ProviderResponse) {
+        return {
+            text: response.text,
+            toolCalls: parseNLTToolCalls(response.text),
+        }
     },
 }

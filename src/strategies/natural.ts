@@ -3,7 +3,7 @@
 // No XML tags, no structured JSON — just clear natural language instructions.
 // The model responds in natural language with a specific pattern we parse.
 
-import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ToolCall } from "../types"
+import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse, ToolCall } from "../types"
 
 /** Convert tools into natural language instructions */
 function toolsToNaturalLanguage(tools: ExtractedPrompt["tools"]): string {
@@ -36,11 +36,33 @@ You can make multiple tool calls in one response. Each one should follow the TOO
 If you don't need any tools, just respond with THINKING and your message.`
 }
 
+/** Parse TOOL_CALL blocks from response text */
+function parseNaturalToolCalls(text: string): ToolCall[] {
+    const calls: ToolCall[] = []
+
+    const callRegex = /TOOL_CALL:\s*(\S+)\s*\n([\s\S]*?)END_CALL/g
+    let match
+    while ((match = callRegex.exec(text)) !== null) {
+        const name = match[1].trim()
+        const body = match[2]
+        const args: Record<string, any> = {}
+
+        const paramRegex = /PARAM\s+(\w+):\s*([\s\S]*?)(?=\nPARAM\s|\nEND_CALL|$)/g
+        let pm
+        while ((pm = paramRegex.exec(body)) !== null) {
+            args[pm[1].trim()] = pm[2].trim()
+        }
+
+        calls.push({ name, args })
+    }
+
+    return calls
+}
+
 export const natural: RenderStrategy = {
     name: "natural",
 
     prepare(prompt: ExtractedPrompt): PreparedPrompt {
-        // Tools are embedded in the system prompt as natural language
         const systemParts: string[] = []
         if (prompt.system) systemParts.push(prompt.system)
         systemParts.push(toolsToNaturalLanguage(prompt.tools))
@@ -51,31 +73,21 @@ export const natural: RenderStrategy = {
                 role: m.role === "system" ? "user" as const : m.role as "user" | "assistant",
                 content: m.content,
             })),
-            // No native tools — tools are in the system prompt text
             temperature: prompt.temperature,
             maxTokens: prompt.maxTokens,
         }
     },
 
-    parseToolCalls(text: string): ToolCall[] {
-        const calls: ToolCall[] = []
+    parseResponse(response: ProviderResponse) {
+        const text = response.text
 
-        const callRegex = /TOOL_CALL:\s*(\S+)\s*\n([\s\S]*?)END_CALL/g
-        let match
-        while ((match = callRegex.exec(text)) !== null) {
-            const name = match[1].trim()
-            const body = match[2]
-            const args: Record<string, any> = {}
+        // Extract thinking section
+        const thinkMatch = text.match(/THINKING:\s*([\s\S]*?)(?=\nTOOL_CALL:|$)/)
+        const thinking = thinkMatch ? thinkMatch[1].trim() : text.split("TOOL_CALL:")[0].trim()
 
-            const paramRegex = /PARAM\s+(\w+):\s*([\s\S]*?)(?=\nPARAM\s|\nEND_CALL|$)/g
-            let pm
-            while ((pm = paramRegex.exec(body)) !== null) {
-                args[pm[1].trim()] = pm[2].trim()
-            }
-
-            calls.push({ name, args })
+        return {
+            text: thinking,
+            toolCalls: parseNaturalToolCalls(text),
         }
-
-        return calls
     },
 }
