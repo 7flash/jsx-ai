@@ -399,3 +399,301 @@ describe("xml strategy", () => {
     })
 })
 
+
+// ═══════════════════════════════════════════════════════════════════
+//   PROVIDER TESTS
+// ═══════════════════════════════════════════════════════════════════
+
+import { GeminiProvider } from "./providers/gemini"
+import { OpenAIProvider } from "./providers/openai"
+import { AnthropicProvider } from "./providers/anthropic"
+
+describe("GeminiProvider", () => {
+    const provider = new GeminiProvider()
+
+    test("parseResponse extracts text", () => {
+        const result = provider.parseResponse({
+            candidates: [{ content: { parts: [{ text: "Hello world" }] } }],
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+        })
+        expect(result.text).toBe("Hello world")
+        expect(result.nativeToolCalls).toHaveLength(0)
+        expect(result.usage?.inputTokens).toBe(10)
+        expect(result.usage?.outputTokens).toBe(5)
+    })
+
+    test("parseResponse extracts function calls", () => {
+        const result = provider.parseResponse({
+            candidates: [{
+                content: {
+                    parts: [
+                        { functionCall: { name: "exec", args: { command: "ls" } } },
+                        { functionCall: { name: "read", args: { path: "a.ts" } } },
+                    ],
+                },
+            }],
+        })
+        expect(result.nativeToolCalls).toHaveLength(2)
+        expect(result.nativeToolCalls[0].name).toBe("exec")
+        expect(result.nativeToolCalls[1].args.path).toBe("a.ts")
+    })
+
+    test("buildRequest merges consecutive same-role messages", () => {
+        const { body } = provider.buildRequest(
+            {
+                system: "sys",
+                messages: [
+                    { role: "user", content: "msg1" },
+                    { role: "user", content: "msg2" },
+                    { role: "assistant", content: "reply" },
+                ],
+                temperature: 0.5,
+                maxTokens: 100,
+            },
+            "gemini-2.5-flash",
+            "key123",
+        )
+        // Two consecutive user messages should be merged into one
+        expect(body.contents).toHaveLength(2)
+        expect(body.contents[0].role).toBe("user")
+        expect(body.contents[0].parts[0].text).toContain("msg1")
+        expect(body.contents[0].parts[0].text).toContain("msg2")
+        expect(body.contents[1].role).toBe("model")
+    })
+
+    test("buildRequest uses x-goog-api-key header", () => {
+        const { headers } = provider.buildRequest(
+            { system: "", messages: [{ role: "user", content: "hi" }], temperature: 0.1, maxTokens: 100 },
+            "gemini-2.5-flash", "test-key",
+        )
+        expect(headers["x-goog-api-key"]).toBe("test-key")
+    })
+})
+
+describe("OpenAIProvider", () => {
+    const provider = new OpenAIProvider()
+
+    test("parseResponse extracts text", () => {
+        const result = provider.parseResponse({
+            choices: [{ message: { content: "Hello" } }],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+        })
+        expect(result.text).toBe("Hello")
+        expect(result.usage?.inputTokens).toBe(10)
+    })
+
+    test("parseResponse extracts tool_calls with JSON arguments", () => {
+        const result = provider.parseResponse({
+            choices: [{
+                message: {
+                    content: null,
+                    tool_calls: [
+                        { type: "function", function: { name: "exec", arguments: '{"cmd":"ls"}' } },
+                    ],
+                },
+            }],
+        })
+        expect(result.nativeToolCalls).toHaveLength(1)
+        expect(result.nativeToolCalls[0].name).toBe("exec")
+        expect(result.nativeToolCalls[0].args.cmd).toBe("ls")
+    })
+
+    test("parseResponse gracefully handles malformed JSON arguments", () => {
+        const result = provider.parseResponse({
+            choices: [{
+                message: {
+                    tool_calls: [
+                        { type: "function", function: { name: "exec", arguments: "not json" } },
+                    ],
+                },
+            }],
+        })
+        expect(result.nativeToolCalls).toHaveLength(1)
+        expect(result.nativeToolCalls[0].name).toBe("exec")
+        expect(result.nativeToolCalls[0].args).toEqual({})
+    })
+
+    test("buildRequest uses max_completion_tokens for o4-* reasoning models", () => {
+        const { body } = provider.buildRequest(
+            { system: "", messages: [{ role: "user", content: "hi" }], temperature: 0.5, maxTokens: 8000 },
+            "o4-mini", "key",
+        )
+        expect(body.max_completion_tokens).toBe(8000)
+        expect(body.max_tokens).toBeUndefined()
+        expect(body.temperature).toBe(1.0) // forced for reasoning models
+    })
+
+    test("buildRequest uses max_tokens for regular models", () => {
+        const { body } = provider.buildRequest(
+            { system: "", messages: [{ role: "user", content: "hi" }], temperature: 0.5, maxTokens: 4000 },
+            "gpt-4o", "key",
+        )
+        expect(body.max_tokens).toBe(4000)
+        expect(body.max_completion_tokens).toBeUndefined()
+        expect(body.temperature).toBe(0.5)
+    })
+
+    test("buildRequest routes deepseek to api.deepseek.com", () => {
+        const { url } = provider.buildRequest(
+            { system: "", messages: [{ role: "user", content: "hi" }], temperature: 0.1, maxTokens: 100 },
+            "deepseek-chat", "key",
+        )
+        expect(url).toContain("api.deepseek.com")
+    })
+})
+
+describe("AnthropicProvider", () => {
+    const provider = new AnthropicProvider()
+
+    test("parseResponse extracts text from content blocks", () => {
+        const result = provider.parseResponse({
+            content: [
+                { type: "text", text: "Here is the answer" },
+            ],
+            usage: { input_tokens: 20, output_tokens: 15 },
+        })
+        expect(result.text).toBe("Here is the answer")
+        expect(result.usage?.inputTokens).toBe(20)
+        expect(result.usage?.outputTokens).toBe(15)
+    })
+
+    test("parseResponse extracts tool_use blocks", () => {
+        const result = provider.parseResponse({
+            content: [
+                { type: "text", text: "I'll run that for you" },
+                { type: "tool_use", name: "exec", input: { command: "ls -la" } },
+                { type: "tool_use", name: "write_file", input: { path: "a.ts", content: "code" } },
+            ],
+        })
+        expect(result.text).toBe("I'll run that for you")
+        expect(result.nativeToolCalls).toHaveLength(2)
+        expect(result.nativeToolCalls[0].name).toBe("exec")
+        expect(result.nativeToolCalls[0].args.command).toBe("ls -la")
+        expect(result.nativeToolCalls[1].name).toBe("write_file")
+    })
+
+    test("buildRequest uses x-api-key and anthropic-version headers", () => {
+        const { headers } = provider.buildRequest(
+            { system: "sys", messages: [{ role: "user", content: "hi" }], temperature: 0.1, maxTokens: 100 },
+            "claude-3-sonnet-20240229", "sk-ant-key",
+        )
+        expect(headers["x-api-key"]).toBe("sk-ant-key")
+        expect(headers["anthropic-version"]).toBe("2023-06-01")
+        expect((headers as Record<string, string>)["Authorization"]).toBeUndefined()
+    })
+
+    test("buildRequest puts system as top-level field, not a message", () => {
+        const { body } = provider.buildRequest(
+            { system: "You are helpful", messages: [{ role: "user", content: "hi" }], temperature: 0.1, maxTokens: 100 },
+            "claude-3-sonnet-20240229", "key",
+        )
+        expect(body.system).toBe("You are helpful")
+        expect(body.messages.every((m: any) => m.role !== "system")).toBe(true)
+    })
+
+    test("buildRequest formats tools with input_schema", () => {
+        const { body } = provider.buildRequest(
+            {
+                system: "",
+                messages: [{ role: "user", content: "hi" }],
+                nativeTools: [{
+                    name: "exec",
+                    description: "Run command",
+                    parameters: { type: "object", properties: { cmd: { type: "string", description: "Command to run" } }, required: ["cmd"] },
+                }],
+                temperature: 0.1,
+                maxTokens: 100,
+            },
+            "claude-3-sonnet-20240229", "key",
+        )
+        expect(body.tools[0].input_schema).toBeDefined()
+        expect(body.tools[0].parameters).toBeUndefined() // Anthropic uses input_schema, not parameters
+    })
+})
+
+
+// ═══════════════════════════════════════════════════════════════════
+//   SKILL TESTS
+// ═══════════════════════════════════════════════════════════════════
+
+import { parseSkillFile, resolveSkills } from "./skill"
+import { writeFileSync, mkdirSync, rmSync } from "fs"
+import { join } from "path"
+
+describe("parseSkillFile", () => {
+    const tmpDir = join(import.meta.dir, ".test-skills")
+
+    // Setup: create test skill files
+    const setup = () => {
+        mkdirSync(tmpDir, { recursive: true })
+        writeFileSync(join(tmpDir, "bun.md"), `---\nname: bun-expert\ndescription: Bun runtime expertise\n---\n## Bun Runtime\n- Use Bun.serve()\n`)
+        writeFileSync(join(tmpDir, "no-frontmatter.md"), `Just some content\nwithout frontmatter\n`)
+    }
+
+    // Teardown
+    const teardown = () => {
+        try { rmSync(tmpDir, { recursive: true }) } catch { }
+    }
+
+    test("parses frontmatter name and description", () => {
+        setup()
+        try {
+            const skill = parseSkillFile(join(tmpDir, "bun.md"))
+            expect(skill.name).toBe("bun-expert")
+            expect(skill.description).toBe("Bun runtime expertise")
+            expect(skill.content).toContain("Use Bun.serve()")
+        } finally { teardown() }
+    })
+
+    test("falls back to filename when no frontmatter", () => {
+        setup()
+        try {
+            const skill = parseSkillFile(join(tmpDir, "no-frontmatter.md"))
+            expect(skill.name).toBe("no-frontmatter")
+            expect(skill.description).toBe("")
+            expect(skill.content).toContain("Just some content")
+        } finally { teardown() }
+    })
+})
+
+describe("resolveSkills", () => {
+    const tmpDir = join(import.meta.dir, ".test-skills-resolve")
+
+    const setup = () => {
+        mkdirSync(tmpDir, { recursive: true })
+        writeFileSync(join(tmpDir, "bun.md"), "---\nname: bun-expert\ndescription: Bun\n---\ncontent\n")
+        writeFileSync(join(tmpDir, "ts.md"), "---\nname: strict-typescript\ndescription: TS\n---\ncontent\n")
+        writeFileSync(join(tmpDir, "sec.md"), "---\nname: security\ndescription: Sec\n---\ncontent\n")
+    }
+    const teardown = () => { try { rmSync(tmpDir, { recursive: true }) } catch { } }
+
+    test("resolves matching skills by name", () => {
+        setup()
+        try {
+            const paths = ["bun.md", "ts.md", "sec.md"].map(f => join(tmpDir, f))
+            const resolved = resolveSkills(paths, ["bun-expert", "security"])
+            expect(resolved).toHaveLength(2)
+            expect(resolved.map(s => s.name)).toContain("bun-expert")
+            expect(resolved.map(s => s.name)).toContain("security")
+        } finally { teardown() }
+    })
+
+    test("handles partial name matches", () => {
+        setup()
+        try {
+            const paths = ["bun.md", "ts.md", "sec.md"].map(f => join(tmpDir, f))
+            const resolved = resolveSkills(paths, ["bun"])
+            expect(resolved).toHaveLength(1)
+            expect(resolved[0].name).toBe("bun-expert")
+        } finally { teardown() }
+    })
+
+    test("returns empty for no matches", () => {
+        setup()
+        try {
+            const paths = ["bun.md"].map(f => join(tmpDir, f))
+            const resolved = resolveSkills(paths, ["nonexistent"])
+            expect(resolved).toHaveLength(0)
+        } finally { teardown() }
+    })
+})

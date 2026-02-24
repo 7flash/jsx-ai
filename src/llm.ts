@@ -14,6 +14,7 @@ import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt } from "./
 import type { Provider } from "./providers/provider"
 import { GeminiProvider } from "./providers/gemini"
 import { OpenAIProvider } from "./providers/openai"
+import { AnthropicProvider } from "./providers/anthropic"
 import { extract } from "./render"
 import { native } from "./strategies/native"
 import { xml } from "./strategies/xml"
@@ -42,6 +43,7 @@ const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybri
 const PROVIDERS: Record<string, Provider> = {
     gemini: new GeminiProvider(),
     openai: new OpenAIProvider(),
+    anthropic: new AnthropicProvider(),
 }
 
 /** Register a custom provider */
@@ -57,7 +59,9 @@ function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStra
 
 /** Detect provider from model name */
 function detectProvider(model: string): string {
-    if (/^(gpt-|o1|o3|o4|chatgpt|dall-e)/i.test(model)) return "openai"
+    if (/^(gpt-|o[0-9]|chatgpt)/i.test(model)) return "openai"
+    if (/^claude/i.test(model)) return "anthropic"
+    if (/^deepseek/i.test(model)) return "openai" // DeepSeek uses OpenAI-compatible API
     return "gemini"
 }
 
@@ -75,6 +79,9 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
 
     if (provider.name === "openai") {
         if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
+        if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
+    } else if (provider.name === "anthropic") {
+        if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY
     } else {
         if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY
         if (process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY

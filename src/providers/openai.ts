@@ -5,8 +5,13 @@ export class OpenAIProvider implements Provider {
     name = "openai"
 
     buildRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+        // DeepSeek uses OpenAI-compatible API with different base URL
+        const baseUrl = model.startsWith("deepseek")
+            ? "https://api.deepseek.com/v1/chat/completions"
+            : "https://api.openai.com/v1/chat/completions"
+
         return {
-            url: "https://api.openai.com/v1/chat/completions",
+            url: baseUrl,
             headers: {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${apiKey}`,
@@ -57,11 +62,15 @@ export class OpenAIProvider implements Provider {
             messages.push({ role: m.role, content: m.content })
         }
 
+        // o4-* reasoning models use max_completion_tokens + fixed temperature
+        const isReasoning = /^o[0-9]/.test(model)
         const body: any = {
             model,
             messages,
-            temperature: prepared.temperature ?? 0.1,
-            max_tokens: prepared.maxTokens ?? 4000,
+            temperature: isReasoning ? 1.0 : (prepared.temperature ?? 0.1),
+            ...(isReasoning
+                ? { max_completion_tokens: prepared.maxTokens ?? 4000 }
+                : { max_tokens: prepared.maxTokens ?? 4000 }),
         }
 
         if (prepared.nativeTools && prepared.nativeTools.length > 0) {

@@ -43,11 +43,20 @@ export class GeminiProvider implements Provider {
     }
 
     private toBody(prepared: PreparedPrompt): any {
+        // Gemini rejects consecutive same-role messages — merge them
+        const contents: { role: string; parts: { text: string }[] }[] = []
+        for (const m of prepared.messages) {
+            const role = m.role === "assistant" ? "model" : "user"
+            const last = contents[contents.length - 1]
+            if (last && last.role === role) {
+                last.parts[0].text += "\n\n" + m.content
+            } else {
+                contents.push({ role, parts: [{ text: m.content }] })
+            }
+        }
+
         const body: any = {
-            contents: prepared.messages.map(m => ({
-                role: m.role === "assistant" ? "model" : "user",
-                parts: [{ text: m.content }],
-            })),
+            contents,
             generationConfig: {
                 temperature: prepared.temperature ?? 0.1,
                 maxOutputTokens: prepared.maxTokens ?? 4000,
