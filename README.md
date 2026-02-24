@@ -260,6 +260,44 @@ extracted.system    // "You are helpful"
 | `temperature` | `number` | `0.1` | Sampling temperature |
 | `maxTokens` | `number` | `4000` | Max output tokens |
 
+## 💬 `callText(model, messages, options?)`
+
+Simple text-in/text-out LLM call — no JSX needed. Uses the same provider routing and auth:
+
+```ts
+import { callText } from "jsx-ai"
+
+const text = await callText("gemini-2.5-flash", [
+  { role: "system", content: "You are a planner. Break tasks into steps." },
+  { role: "user", content: "Build a REST API with authentication" },
+])
+
+console.log(text)  // "1. Set up project with Bun.serve()..."
+```
+
+## 🔄 `streamLLM(model, messages, options?)`
+
+Stream LLM responses token-by-token via SSE. Same provider routing as `callText`:
+
+```ts
+import { streamLLM } from "jsx-ai"
+
+for await (const chunk of streamLLM("gemini-2.5-flash", [
+  { role: "system", content: "You are a storyteller" },
+  { role: "user", content: "Tell me a short story" },
+])) {
+  process.stdout.write(chunk)
+}
+```
+
+Options for both `callText` and `streamLLM`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `temperature` | `number` | `0.3` | Sampling temperature |
+| `maxTokens` | `number` | `8000` | Max output tokens |
+| `apiKey` | `string` | from env | Override API key |
+
 ## License
 
 MIT
