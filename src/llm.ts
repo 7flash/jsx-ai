@@ -46,6 +46,67 @@ const PROVIDERS: Record<string, Provider> = {
     anthropic: new AnthropicProvider(),
 }
 
+// ── Hook System ──
+// Hooks receive telemetry for every LLM call (prompt, response, timing, cost)
+
+export interface PromptEvent {
+    id: string
+    timestamp: number
+    method: "callLLM" | "callText" | "streamLLM"
+    model: string
+    provider: string
+    strategy?: string
+    messages: Array<{ role: string; content: string }>
+    system?: string
+    tools?: string[]
+    response: {
+        text: string
+        toolCalls?: Array<{ name: string; args: any }>
+    }
+    usage?: {
+        inputTokens: number
+        outputTokens: number
+        thinkingTokens?: number
+    }
+    durationMs: number
+    error?: string
+}
+
+export type PromptHook = (event: PromptEvent) => void | Promise<void>
+
+const hooks: PromptHook[] = []
+
+/** Register a hook that receives telemetry for every LLM call */
+export function registerHook(hook: PromptHook): void {
+    hooks.push(hook)
+}
+
+/** Fire all hooks (async, non-blocking) */
+function fireHooks(event: PromptEvent): void {
+    for (const hook of hooks) {
+        try { Promise.resolve(hook(event)).catch(() => { }) } catch { }
+    }
+}
+
+let hookIdCounter = 0
+function generateId(): string {
+    return `${Date.now()}-${++hookIdCounter}`
+}
+
+// Auto-register explorer hook — checks env lazily so it works
+// even if JSX_AI_EXPLORER_URL is set after module load
+registerHook(async (event) => {
+    const url = process.env.JSX_AI_EXPLORER_URL
+    if (!url) return
+    try {
+        await fetch(`${url}/api/prompts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(event),
+        })
+    } catch { }
+})
+
 /** Register a custom provider */
 export function registerProvider(name: string, provider: Provider): void {
     PROVIDERS[name] = provider
@@ -128,6 +189,8 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
  * ```
  */
 export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<LLMResponse> {
+    const t0 = Date.now()
+
     // 1. Extract structured data from JSX tree
     const prompt = extract(tree)
 
@@ -156,7 +219,15 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
 
     if (!res.ok) {
         const errText = await res.text()
-        throw new Error(`LLM API error ${res.status}: ${errText.substring(0, 500)}`)
+        const error = `LLM API error ${res.status}: ${errText.substring(0, 500)}`
+        fireHooks({
+            id: generateId(), timestamp: t0, method: "callLLM", model,
+            provider: provider.name, strategy: strategy.name,
+            messages: prompt.messages, system: prompt.system,
+            tools: prompt.tools.map(t => t.name),
+            response: { text: '' }, durationMs: Date.now() - t0, error,
+        })
+        throw new Error(error)
     }
 
     const data = await res.json()
@@ -167,13 +238,26 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     // 7. Strategy parses the normalized response
     const { text, toolCalls } = strategy.parseResponse(providerResponse)
 
-    return {
+    const result: LLMResponse = {
         text,
         toolCalls,
         raw: data,
         request: { url, body },
         usage: providerResponse.usage,
     }
+
+    // 8. Fire hooks
+    fireHooks({
+        id: generateId(), timestamp: t0, method: "callLLM", model,
+        provider: provider.name, strategy: strategy.name,
+        messages: prompt.messages, system: prompt.system,
+        tools: prompt.tools.map(t => t.name),
+        response: { text, toolCalls },
+        usage: providerResponse.usage,
+        durationMs: Date.now() - t0,
+    })
+
+    return result
 }
 
 /**
@@ -205,6 +289,7 @@ export async function callText(
     messages: Array<{ role: string; content: string }>,
     options?: { temperature?: number; maxTokens?: number; apiKey?: string },
 ): Promise<string> {
+    const t0 = Date.now()
     const provider = resolveProvider(model, undefined)
     const apiKey = resolveApiKey(provider, options)
 
@@ -231,11 +316,26 @@ export async function callText(
 
     if (!res.ok) {
         const errText = await res.text()
-        throw new Error(`LLM API error ${res.status}: ${errText.substring(0, 500)}`)
+        const error = `LLM API error ${res.status}: ${errText.substring(0, 500)}`
+        fireHooks({
+            id: generateId(), timestamp: t0, method: "callText", model,
+            provider: provider.name, messages, system,
+            response: { text: '' }, durationMs: Date.now() - t0, error,
+        })
+        throw new Error(error)
     }
 
     const data = await res.json()
     const result = provider.parseResponse(data)
+
+    fireHooks({
+        id: generateId(), timestamp: t0, method: "callText", model,
+        provider: provider.name, messages, system,
+        response: { text: result.text },
+        usage: result.usage,
+        durationMs: Date.now() - t0,
+    })
+
     return result.text
 }
 

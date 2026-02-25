@@ -127,6 +127,7 @@ export interface ProviderResponse {
     usage?: {
         inputTokens: number
         outputTokens: number
+        thinkingTokens?: number
     }
 }
 
@@ -138,6 +139,7 @@ export interface LLMResponse {
     usage?: {
         inputTokens: number
         outputTokens: number
+        thinkingTokens?: number
     }
 }
 

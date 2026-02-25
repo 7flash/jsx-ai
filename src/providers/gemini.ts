@@ -38,6 +38,7 @@ export class GeminiProvider implements Provider {
             usage: usage ? {
                 inputTokens: usage.promptTokenCount || 0,
                 outputTokens: usage.candidatesTokenCount || 0,
+                thinkingTokens: usage.thoughtsTokenCount || 0,
             } : undefined,
         }
     }
