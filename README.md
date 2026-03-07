@@ -1,5 +1,8 @@
 # jsx-ai
 
+[![npm](https://img.shields.io/npm/v/jsx-ai.svg?style=flat-square)](https://www.npmjs.com/package/jsx-ai)
+[![bundle](https://img.shields.io/bundlephobia/minzip/jsx-ai?style=flat-square&label=size)](https://bundlephobia.com/package/jsx-ai)
+
 JSX interface for structured LLM calls. Tools, messages, and prompts become composable components.
 
 ```tsx
