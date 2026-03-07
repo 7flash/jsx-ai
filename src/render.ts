@@ -84,7 +84,7 @@ function extractTool(node: JsxAiNode & { type: "tool" }): ExtractedTool {
 
     for (const param of paramNodes) {
         if (param.type !== "param") continue
-        const p = param.props as any
+        const p = (param as JsxAiNode & { type: "param" }).props as any
         const entry: { type: string; description: string; enum?: string[] } = {
             type: p.type || "string",
             description: p.children || "",
