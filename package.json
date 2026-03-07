@@ -1,6 +1,6 @@
 {
   "name": "jsx-ai",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "JSX interface for structured LLM calls — tools, messages, and prompts as composable components",
   "type": "module",
   "main": "src/index.ts",
