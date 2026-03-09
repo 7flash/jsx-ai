@@ -1,7 +1,7 @@
 // ── Tree Renderer ──
 // Walks the JSX virtual tree and extracts structured prompt data
 
-import type { JsxAiNode, ExtractedPrompt, ExtractedTool, ExtractedMessage } from "./types"
+import type { JsxAiNode, ParamNode, ExtractedPrompt, ExtractedTool, ExtractedMessage } from "./types"
 
 /**
  * Extract structured prompt data from a JSX tree.
@@ -84,7 +84,7 @@ function extractTool(node: JsxAiNode & { type: "tool" }): ExtractedTool {
 
     for (const param of paramNodes) {
         if (param.type !== "param") continue
-        const p = (param as JsxAiNode & { type: "param" }).props as any
+        const p = (param as ParamNode).props
         const entry: { type: string; description: string; enum?: string[] } = {
             type: p.type || "string",
             description: p.children || "",
