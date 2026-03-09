@@ -134,6 +134,7 @@ declare global {
             system: { children?: any }
             prompt: { model?: string; temperature?: number; maxTokens?: number; strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"; children?: any }
         }
-        type Element = JsxAiNode
+        // Removed `type Element = JsxAiNode` — causes TS2300 in consuming projects
+        // that also declare JSX.Element (React, DOM lib, etc.)
     }
 }
