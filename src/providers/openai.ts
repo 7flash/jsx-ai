@@ -5,10 +5,21 @@ export class OpenAIProvider implements Provider {
     name = "openai"
 
     buildRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
-        // DeepSeek uses OpenAI-compatible API with different base URL
-        const baseUrl = model.startsWith("deepseek")
-            ? "https://api.deepseek.com/v1/chat/completions"
-            : "https://api.openai.com/v1/chat/completions"
+        // OpenAI-compatible APIs with different base URLs
+        let baseUrl: string
+        
+        if (model.startsWith("deepseek")) {
+            const base = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1"
+            baseUrl = `${base.replace(/\/$/, '')}/chat/completions`
+        } else if (model.startsWith("qwen")) {
+            // Alibaba Cloud DashScope
+            const base = process.env.DASHSCOPE_BASE_URL || process.env.OPENAI_API_URL || "https://coding-intl.dashscope.aliyuncs.com/v1"
+            baseUrl = `${base.replace(/\/$/, '')}/chat/completions`
+        } else {
+            // Standard OpenAI or OpenAI-compatible (via OPENAI_API_URL)
+            const base = process.env.OPENAI_API_URL || "https://api.openai.com/v1"
+            baseUrl = `${base.replace(/\/$/, '')}/chat/completions`
+        }
 
         return {
             url: baseUrl,

@@ -122,7 +122,7 @@ function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStra
 function detectProvider(model: string): string {
     if (/^(gpt-|o[0-9]|chatgpt)/i.test(model)) return "openai"
     if (/^claude/i.test(model)) return "anthropic"
-    if (/^deepseek/i.test(model)) return "openai" // DeepSeek uses OpenAI-compatible API
+    if (/^(deepseek|qwen)/i.test(model)) return "openai" // DeepSeek & Qwen use OpenAI-compatible API
     return "gemini"
 }
 
@@ -141,6 +141,8 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
     if (provider.name === "openai") {
         if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
         if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
+        if (process.env.QWEN_API_KEY) return process.env.QWEN_API_KEY
+        if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY
     } else if (provider.name === "anthropic") {
         if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY
     } else {
@@ -160,8 +162,10 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
     throw new Error(
         `No API key found for ${provider.name}. ` +
         (provider.name === "openai"
-            ? "Set OPENAI_API_KEY or pass apiKey option."
-            : "Set GEMINI_API_KEY, pass apiKey option, or add .config.toml")
+            ? "Set OPENAI_API_KEY, DEEPSEEK_API_KEY, QWEN_API_KEY, DASHSCOPE_API_KEY, or pass apiKey option."
+            : provider.name === "anthropic"
+                ? "Set ANTHROPIC_API_KEY or pass apiKey option."
+                : "Set GEMINI_API_KEY, GOOGLE_API_KEY, pass apiKey option, or add .config.toml")
     )
 }
 
@@ -188,6 +192,7 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
  * result.toolCalls  // [{ name: "exec", args: { command: "ls" } }]
  * ```
  */
+ import { measure } from "measure-fn"
 export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<LLMResponse> {
     const t0 = Date.now()
 
@@ -202,7 +207,9 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     // 3. Resolve strategy + provider
     const strategy = resolveStrategy(prompt, options?.strategy)
     const model = prompt.model || "gemini-2.5-flash"
-    const provider = resolveProvider(model, options?.provider)
+    // Use provider from options, or from prompt JSX prop, or detect from model
+    const providerOverride = options?.provider || (prompt as any).providerOverride
+    const provider = resolveProvider(model, providerOverride)
     const apiKey = resolveApiKey(provider, options)
 
     // 4. Strategy transforms the prompt (provider-agnostic)
@@ -211,14 +218,15 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     // 5. Provider builds the request
     const { url, headers, body } = provider.buildRequest(prepared, model, apiKey)
 
-    const res = await fetch(url, {
+    const res = await measure('fetch '+url, () => fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-    })
+    }));
 
     if (!res.ok) {
         const errText = await res.text()
+        console.error('[jsx-ai] Request failed:', res.status, 'URL:', url, 'Body:', JSON.stringify(body).substring(0, 300))
         const error = `LLM API error ${res.status}: ${errText.substring(0, 500)}`
         fireHooks({
             id: generateId(), timestamp: t0, method: "callLLM", model,
@@ -429,11 +437,14 @@ export async function* streamLLM(
         return
     }
 
-    // ── OpenAI-compatible Streaming (OpenAI, DeepSeek, OpenRouter, local) ──
+    // ── OpenAI-compatible Streaming (OpenAI, DeepSeek, Qwen, OpenRouter, local) ──
     const isDeepseek = model.includes("deepseek")
+    const isQwen = model.includes("qwen")
     const baseUrl = isDeepseek
-        ? "https://api.deepseek.com/v1"
-        : (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")
+        ? (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1").replace(/\/$/, "")
+        : isQwen
+            ? (process.env.DASHSCOPE_BASE_URL || process.env.OPENAI_API_URL || "https://coding-intl.dashscope.aliyuncs.com/v1").replace(/\/$/, "")
+            : (process.env.OPENAI_API_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")
 
     const isReasoning = /^o[0-9]/.test(model)
     const body = isReasoning

@@ -203,6 +203,12 @@ describe("extract", () => {
         const result = extract(tree)
         expect(result.strategy).toBe("xml")
     })
+
+    test("provider override is extracted from prompt", () => {
+        const tree = h("prompt", { provider: "openai", children: [] })
+        const result = extract(tree) as any
+        expect(result.providerOverride).toBe("openai")
+    })
 })
 
 describe("composable components", () => {
@@ -539,6 +545,21 @@ describe("OpenAIProvider", () => {
             "deepseek-chat", "key",
         )
         expect(url).toContain("api.deepseek.com")
+    })
+
+    test("buildRequest routes qwen to DashScope-compatible chat completions", () => {
+        const prev = process.env.DASHSCOPE_BASE_URL
+        process.env.DASHSCOPE_BASE_URL = "https://dashscope.example.com/v1"
+        try {
+            const { url } = provider.buildRequest(
+                { system: "", messages: [{ role: "user", content: "hi" }], temperature: 0.1, maxTokens: 100 },
+                "qwen-max", "key",
+            )
+            expect(url).toBe("https://dashscope.example.com/v1/chat/completions")
+        } finally {
+            if (prev === undefined) delete process.env.DASHSCOPE_BASE_URL
+            else process.env.DASHSCOPE_BASE_URL = prev
+        }
     })
 })
 
