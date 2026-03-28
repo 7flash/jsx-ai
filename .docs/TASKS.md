@@ -10,24 +10,26 @@
 - [x] ~~**Add explicit fallback test for optional telemetry import**~~ — ✅ DONE. Added a regression test that forces the telemetry loader to fail and verifies `callLLM` still succeeds.
 - [x] ~~**Add branch coverage for release branches**~~ — ✅ DONE. Expanded CI triggers to run on `release/**` branches and `v*` version tags in addition to main/master and pull requests.
 - [x] ~~**Hide test-only telemetry loader hook from public API docs**~~ — ✅ DONE. Renamed the helper to an explicitly internal test-only symbol and marked it `@internal` in `src/llm.ts`; it remains absent from root exports/docs.
-- [ ] **Add CI status coverage for consumer smoke tests** — Extend the workflow once smoke-test coverage exists so published import paths are validated too.
+- [x] ~~**Add CI status coverage for consumer smoke tests**~~ — ✅ DONE. Split consumer smoke coverage into its own test file and GitHub Actions job so CI reports a dedicated status check.
 - [x] ~~**Add a package-consumer smoke test**~~ — ✅ DONE. Added a temp-project smoke test that installs the package via `file:` and validates `jsx-ai`, `jsx-runtime`, `jsx-dev-runtime`, and provider exports.
 
 ## 🟢 Priority: Features
 - [x] ~~**Add smoke tests for package consumer import paths**~~ — ✅ DONE. Verified published-style consumer imports in a clean temp project using Bun.
-- [ ] **Split smoke tests into a dedicated test file/script** — Keep the main unit suite focused while preserving clean-consumer coverage.
+- [x] ~~**Split smoke tests into a dedicated test file/script**~~ — ✅ DONE. Moved consumer smoke coverage into `src/consumer-smoke.test.ts` and added `test:smoke`.
+- [ ] **Add publish-mode smoke coverage** — Verify the packed tarball or npm-published artifact behaves the same as the local `file:` install.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
 - Test command: `bun test`
-- Current local suite status: 48 passing tests, including a temp-project consumer smoke test.
+- Focused scripts: `bun run test:unit`, `bun run test:smoke`
+- Current local suite status: 48 passing tests across unit + consumer smoke coverage.
 - Bench command: `bun run bench/strategies.ts`
 - Main test file currently discovered: `src/index.test.ts`
 - LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`
 - `src/llm.ts` now treats `measure-fn` as optional telemetry by using a dynamic import fallback around fetch measurement.
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
-- CI workflow: `.github/workflows/test.yml` runs Bun install + tests on push, pull_request, `release/**` branches, and `v*` tags.
-- Consumer smoke coverage currently lives in `src/index.test.ts` and uses `bun run --install=fallback` inside a temp project to verify published-style imports.
+- CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags.
+- Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and uses `bun run --install=fallback` inside a temp project to verify published-style imports.
 
 ## ⚠️ Security Reminders
 - Do not commit API keys or `.config.toml` secrets.
