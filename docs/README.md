@@ -4,10 +4,11 @@
 
 If you're new to the library, use this order:
 
-1. [Examples guide](./examples.md) — runnable example entrypoints and what each one demonstrates.
-2. [API reference](./api-reference.md) — concise reference for the main exports, options, skills API, hooks, strategies, providers, and common types.
-3. [Configuration & compatibility guide](./configuration.md) — env vars, `.config.toml`, provider detection, explorer hook, and base URL overrides.
-4. [Troubleshooting guide](./troubleshooting.md) — common setup, provider, streaming, skills, and CI/smoke test failures with quick fixes.
+1. [Quickstart](./quickstart.md) — install, configure, and make your first `callLLM()` call.
+2. [Examples guide](./examples.md) — runnable example entrypoints and what each one demonstrates.
+3. [API reference](./api-reference.md) — concise reference for the main exports, options, skills API, hooks, strategies, providers, and common types.
+4. [Configuration & compatibility guide](./configuration.md) — env vars, `.config.toml`, provider detection, explorer hook, and base URL overrides.
+5. [Troubleshooting guide](./troubleshooting.md) — common setup, provider, streaming, skills, and CI/smoke test failures with quick fixes.
 
 ## Build and extend
 

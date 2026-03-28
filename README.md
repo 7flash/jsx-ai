@@ -12,6 +12,7 @@ Badge guide:
 - `release-validation / registry_smoke` → manual/release registry-install validation workflow
 
 Start here:
+- [Quickstart](docs/quickstart.md)
 - [What you get](#-what-you-get)
 - [Examples guide](docs/examples.md)
 - [API reference](docs/api-reference.md)
