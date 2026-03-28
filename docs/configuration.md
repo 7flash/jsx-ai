@@ -2,6 +2,8 @@
 
 This guide covers environment variables, API key resolution, `.config.toml`, provider-specific base URL overrides, and related compatibility details.
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## API key resolution
 
 `jsx-ai` resolves API keys in this order:

@@ -2,6 +2,8 @@
 
 This guide covers the most common `jsx-ai` setup, runtime, and CI problems.
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## `No API key found for ...`
 
 Symptoms:
