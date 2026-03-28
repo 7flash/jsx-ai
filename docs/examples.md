@@ -76,6 +76,36 @@ What it shows:
 - resolving full skill content with `resolveSkills()` + `<Skill resolve />`
 - sample skill markdown files under `examples/skills/`
 
+### `examples/call-text.ts`
+
+A runnable `callText()` example without JSX.
+
+Run it with:
+
+```sh
+bun run examples/call-text.ts
+```
+
+What it shows:
+- text-in/text-out usage with `callText()`
+- OpenAI-compatible request shape
+- mocking `fetch` for a self-contained demo
+
+### `examples/stream-text.ts`
+
+A runnable `streamLLM()` example.
+
+Run it with:
+
+```sh
+bun run examples/stream-text.ts
+```
+
+What it shows:
+- chunked token streaming with `streamLLM()`
+- local mock SSE server usage
+- OpenAI-compatible streaming path without external credentials
+
 ## When to use examples vs guides
 
 - Use the example files when you want runnable code you can copy/adapt.

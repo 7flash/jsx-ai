@@ -47,7 +47,8 @@
 - [x] ~~**Add examples doc/index**~~ — ✅ DONE. Added `docs/examples.md` and linked it from both the docs index and README quick links.
 - [x] ~~**Add more example files**~~ — ✅ DONE. Added `examples/render-prompt.tsx` and `examples/customizations.tsx` to complement the coding-agent example.
 - [x] ~~**Add skills/examples coverage**~~ — ✅ DONE. Added `examples/skills.tsx` plus sample skill markdown files to demonstrate discovery and resolution.
-- [ ] **Add streaming/text examples** — The next useful runnable examples are focused demos for `callText()` and `streamLLM()`.
+- [x] ~~**Add streaming/text examples**~~ — ✅ DONE. Added self-contained runnable demos for `callText()` and `streamLLM()` using mock/local transport behavior.
+- [ ] **Add provider-specific examples** — The next useful examples are focused Gemini/OpenAI/Anthropic usage demos or provider override examples.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -61,7 +62,7 @@
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
 - Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware summary with run links.
-- Contributor/testing guidance now lives in `docs/contributor-ci.md`; maintainer/release operations live in `docs/maintainer-release.md`; architecture details live in `docs/architecture.md`; extension/customization guidance lives in `docs/extensibility.md`; runnable example references live in `docs/examples.md`; example entrypoints now include `examples/coding-agent.tsx`, `examples/render-prompt.tsx`, `examples/customizations.tsx`, and `examples/skills.tsx` with sample markdown skills under `examples/skills/`; `docs/README.md` acts as a lightweight docs index and README keeps top-level quick links for discoverability.
+- Contributor/testing guidance now lives in `docs/contributor-ci.md`; maintainer/release operations live in `docs/maintainer-release.md`; architecture details live in `docs/architecture.md`; extension/customization guidance lives in `docs/extensibility.md`; runnable example references live in `docs/examples.md`; example entrypoints now include `examples/coding-agent.tsx`, `examples/render-prompt.tsx`, `examples/customizations.tsx`, `examples/skills.tsx`, `examples/call-text.ts`, and `examples/stream-text.ts`; `docs/README.md` acts as a lightweight docs index and README keeps top-level quick links for discoverability.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
 - Registry smoke coverage lives in `src/registry-smoke.test.ts`, uses `REGISTRY_SMOKE_SPEC`, and now performs an npm metadata preflight so missing versions fail with actionable diagnostics.
 
