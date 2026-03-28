@@ -118,6 +118,20 @@ Notes:
 
 Contributor/testing workflow notes now live in [docs/contributor-ci.md](docs/contributor-ci.md).
 
+## Runnable examples
+
+Start with the full [examples guide](docs/examples.md), or jump straight to a runnable entrypoint:
+
+- `bun run examples/coding-agent.tsx` — end-to-end JSX agent prompt with tools + `callLLM()`
+- `bun run examples/render-prompt.tsx` — inspect extracted prompt structure without a network call
+- `bun run examples/customizations.tsx` — custom provider / strategy / hook registration
+- `bun run examples/skills.tsx` — skill discovery + resolution flow with markdown skills
+- `bun run examples/call-text.ts` — lightweight `callText()` usage without JSX
+- `bun run examples/stream-text.ts` — `streamLLM()` token streaming against a local mock SSE server
+- `bun run examples/providers.tsx` — Gemini / OpenAI-compatible / Anthropic + provider override flows
+- `bun run examples/strategies.tsx` — compare `native`, `xml`, `nlt`, and `hybrid`
+- `bun run examples/natural-strategy.tsx` — standalone `natural` strategy protocol and parsing
+
 ## ✨ What You Get
 
 - **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name

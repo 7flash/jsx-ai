@@ -51,7 +51,8 @@
 - [x] ~~**Add provider-specific examples**~~ — ✅ DONE. Added `examples/providers.tsx` showing Gemini, OpenAI-compatible, Anthropic, and explicit provider override flows.
 - [x] ~~**Add strategy-specific examples**~~ — ✅ DONE. Added `examples/strategies.tsx` covering how `native`, `xml`, `nlt`, and `hybrid` prepare prompts and parse responses.
 - [x] ~~**Add natural-strategy coverage**~~ — ✅ DONE. Added `examples/natural-strategy.tsx` showing the standalone plain-language `TOOL_CALL` protocol and parser behavior.
-- [ ] **Add docs/readme discoverability for examples** — The next useful docs improvement is surfacing the expanded examples set more prominently from the main README or docs index.
+- [x] ~~**Add docs/readme discoverability for examples**~~ — ✅ DONE. Added a runnable examples map to `README.md` and `docs/README.md` so the expanded example set is visible without digging into the examples guide.
+- [ ] **Add API reference docs** — The next useful docs gap is a concise reference for exports like `callLLM`, `callText`, `streamLLM`, `Skill`, and strategy/provider registration.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
