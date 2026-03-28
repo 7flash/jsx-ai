@@ -192,7 +192,14 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
  * result.toolCalls  // [{ name: "exec", args: { command: "ls" } }]
  * ```
  */
- import { measure } from "measure-fn"
+async function measureAsync<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    try {
+        const mod = await import("measure-fn")
+        if (typeof mod.measure === "function") return await mod.measure(label, fn)
+    } catch { }
+    return await fn()
+}
+
 export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<LLMResponse> {
     const t0 = Date.now()
 
@@ -218,11 +225,11 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     // 5. Provider builds the request
     const { url, headers, body } = provider.buildRequest(prepared, model, apiKey)
 
-    const res = await measure('fetch '+url, () => fetch(url, {
+    const res = await measureAsync(`fetch ${url}`, () => fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-    }));
+    }))
 
     if (!res.ok) {
         const errText = await res.text()

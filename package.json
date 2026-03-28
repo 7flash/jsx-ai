@@ -35,8 +35,7 @@
   },
   "author": "7flash",
   "dependencies": {
-    "gx402": "^1.5.1",
-    "measure-fn": "^3.11.0"
+    "gx402": "^1.5.1"
   },
   "devDependencies": {
     "@types/bun": "^1.3.9"
