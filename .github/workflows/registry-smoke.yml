@@ -21,6 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Print registry smoke target
+        run: echo "Registry smoke target: ${REGISTRY_SMOKE_SPEC:-pending-release-tag-resolution}"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -31,9 +34,17 @@ jobs:
 
       - name: Set package spec from release tag
         if: github.event_name == 'release'
-        run: echo "REGISTRY_SMOKE_SPEC=jsx-ai@${GITHUB_EVENT_RELEASE_TAG_NAME#v}" >> "$GITHUB_ENV"
+        run: |
+          echo "REGISTRY_SMOKE_SPEC=jsx-ai@${GITHUB_EVENT_RELEASE_TAG_NAME#v}" >> "$GITHUB_ENV"
+          echo "Resolved release smoke target: jsx-ai@${GITHUB_EVENT_RELEASE_TAG_NAME#v}"
         env:
           GITHUB_EVENT_RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
 
       - name: Run registry smoke test
         run: bun run test:smoke:registry
+
+      - name: Registry smoke failure hint
+        if: failure()
+        run: |
+          echo "Registry smoke failed for ${REGISTRY_SMOKE_SPEC:-unknown target}."
+          echo "If this was triggered by a fresh release, npm propagation may still be in flight — retry this workflow after the package version becomes visible in the registry."
