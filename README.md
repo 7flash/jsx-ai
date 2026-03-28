@@ -124,6 +124,13 @@ For contributors/maintainers:
 - Use the **Registry smoke** workflow / `bun run test:smoke:registry` when you need to validate an actually published npm package version.
 - Use CI/workflow dispatch when you want the same environment GitHub sees, especially for release validation and post-publish checks.
 
+### Benchmarks vs tests
+
+- Use tests (`bun test`, `bun run test:unit`, `bun run test:smoke`) for correctness, regressions, packaging safety, and release confidence.
+- Use `bun run bench/strategies.ts` when you are comparing strategy behavior, prompt formats, or agentic quality/performance tradeoffs.
+- Do **not** treat benchmark output as a substitute for passing tests — benchmarks explain behavior and performance, tests enforce correctness.
+- Run benchmarks when changing strategy logic, evaluation scenarios, or benchmark methodology; skip them for ordinary docs/config changes unless you are validating a performance claim.
+
 ### Release smoke checks
 
 Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
