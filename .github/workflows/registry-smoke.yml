@@ -20,6 +20,9 @@ jobs:
       REGISTRY_SMOKE_RETRY_ATTEMPTS: '6'
       REGISTRY_SMOKE_RETRY_DELAY_MS: '10000'
     steps:
+      - name: Capture start time
+        run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -50,6 +53,8 @@ jobs:
       - name: Write registry smoke summary
         if: always()
         run: |
+          ENDED_AT=$(date +%s)
+          DURATION_SECONDS=$((ENDED_AT - JOB_STARTED_AT))
           {
             echo "## Registry smoke test"
             echo
@@ -60,6 +65,7 @@ jobs:
             echo "- Package spec: ${REGISTRY_SMOKE_SPEC:-unresolved}"
             echo "- Retry policy: ${REGISTRY_SMOKE_RETRY_ATTEMPTS} attempts, ${REGISTRY_SMOKE_RETRY_DELAY_MS}ms delay"
             echo "- Command: \\`bun run test:smoke:registry\\`"
+            echo "- Duration: ${DURATION_SECONDS}s"
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
 

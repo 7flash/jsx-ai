@@ -16,6 +16,9 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
+      - name: Capture start time
+        run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -33,6 +36,8 @@ jobs:
       - name: Write unit test summary
         if: always()
         run: |
+          ENDED_AT=$(date +%s)
+          DURATION_SECONDS=$((ENDED_AT - JOB_STARTED_AT))
           {
             echo "## Unit tests"
             echo
@@ -40,6 +45,7 @@ jobs:
             echo "- Ref: ${GITHUB_REF}"
             echo "- Commit: ${GITHUB_SHA}"
             echo "- Command: \\`bun run test:unit\\`"
+            echo "- Duration: ${DURATION_SECONDS}s"
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -47,6 +53,9 @@ jobs:
     name: Consumer smoke test
     runs-on: ubuntu-latest
     steps:
+      - name: Capture start time
+        run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -64,6 +73,8 @@ jobs:
       - name: Write consumer smoke summary
         if: always()
         run: |
+          ENDED_AT=$(date +%s)
+          DURATION_SECONDS=$((ENDED_AT - JOB_STARTED_AT))
           {
             echo "## Consumer smoke test"
             echo
@@ -72,5 +83,6 @@ jobs:
             echo "- Commit: ${GITHUB_SHA}"
             echo "- Command: \\`bun run test:smoke\\`"
             echo "- Coverage: file install + packed tarball install"
+            echo "- Duration: ${DURATION_SECONDS}s"
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
