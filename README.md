@@ -2,6 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/jsx-ai.svg?style=flat-square)](https://www.npmjs.com/package/jsx-ai)
 [![bundle](https://img.shields.io/bundlephobia/minzip/jsx-ai?style=flat-square&label=size)](https://bundlephobia.com/package/jsx-ai)
+[![test](https://img.shields.io/github/actions/workflow/status/7flash/jsx-ai/test.yml?branch=main&style=flat-square&label=test)](https://github.com/7flash/jsx-ai/actions/workflows/test.yml)
 
 JSX interface for structured LLM calls. Tools, messages, and prompts become composable components.
 
@@ -84,6 +85,19 @@ Add to `tsconfig.json`:
   }
 }
 ```
+
+## Development
+
+Fresh clone / first run:
+
+```sh
+bun install
+bun test
+```
+
+Notes:
+- Run `bun install` before `bun test` in a fresh checkout so runtime deps like `measure-fn` are available.
+- CI runs the same install + test flow in `.github/workflows/test.yml`.
 
 ## ✨ What You Get
 
