@@ -106,6 +106,16 @@ Notes:
 - Run `bun install` before `bun test` in a fresh checkout so runtime deps like `measure-fn` are available.
 - CI runs the same install + test flow in `.github/workflows/test.yml`.
 
+### CI map
+
+For contributors/maintainers:
+- `.github/workflows/test.yml`
+  - **Unit tests** job → `bun run test:unit`
+  - **Consumer smoke test** job → `bun run test:smoke`
+- `.github/workflows/registry-smoke.yml`
+  - **Registry install smoke test** → `bun run test:smoke:registry`
+  - used for manual registry validation and release-triggered publish verification
+
 ### Release smoke checks
 
 Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
