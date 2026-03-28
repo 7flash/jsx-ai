@@ -18,6 +18,7 @@ Quick links:
 - [Examples guide](docs/examples.md)
 - [API reference](docs/api-reference.md)
 - [Configuration & compatibility guide](docs/configuration.md)
+- [Troubleshooting guide](docs/troubleshooting.md)
 - [Extension & customization guide](docs/extensibility.md)
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)
