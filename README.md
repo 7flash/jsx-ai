@@ -110,6 +110,20 @@ For a published npm install check, use `.github/workflows/registry-smoke.yml`:
 - The release-triggered workflow resolves the package spec automatically from the git tag (for example `v0.1.5` → `jsx-ai@0.1.5`).
 - If npm propagation is delayed, the workflow already retries automatically before failing.
 
+### Release checklist
+
+Before or during a release:
+1. Run local verification:
+   - `bun install`
+   - `bun test`
+   - or the focused scripts: `bun run test:unit` and `bun run test:smoke`
+2. Confirm the packed artifact still works via the smoke coverage backed by `bun pm pack`.
+3. Publish the package/version.
+4. Verify the published registry install:
+   - rely on the release-triggered `registry-smoke.yml`, or
+   - manually run **Registry smoke** with `jsx-ai@latest` or the exact version you just published.
+5. If the registry smoke check fails immediately after publish, wait for npm propagation and rerun the workflow.
+
 ## ✨ What You Get
 
 - **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name

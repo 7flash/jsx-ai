@@ -24,7 +24,8 @@
 - [x] ~~**Add duration metrics to workflow summaries**~~ — ✅ DONE. Added per-job elapsed duration output to unit, consumer smoke, and registry smoke summaries.
 - [x] ~~**Add artifact/log links to workflow summaries**~~ — ✅ DONE. Added direct workflow run, attempt, and Actions overview links to CI and registry smoke summaries.
 - [x] ~~**Add release-doc note for manual registry smoke runs**~~ — ✅ DONE. Documented manual `registry-smoke.yml` usage and package-spec guidance in the README release smoke section.
-- [ ] **Document release checklist** — Add a short publish/release checklist that ties together tests, packed-artifact smoke, and registry smoke validation.
+- [x] ~~**Document release checklist**~~ — ✅ DONE. Added a concise README release checklist covering local tests, packed-artifact verification, publish, and registry smoke validation.
+- [ ] **Add release badge/docs link for registry smoke workflow** — Surface the release-validation path more prominently near the top-level project metadata.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -38,7 +39,7 @@
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
 - Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware summary with run links.
-- README now includes a release smoke section covering when to run the manual registry workflow and how to choose the package spec.
+- README now includes a release smoke section covering when to run the manual registry workflow, how to choose the package spec, and a short release checklist.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
 - Registry smoke coverage lives in `src/registry-smoke.test.ts`, uses `REGISTRY_SMOKE_SPEC`, and now performs an npm metadata preflight so missing versions fail with actionable diagnostics.
 
