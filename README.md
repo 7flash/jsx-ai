@@ -131,6 +131,8 @@ For contributors/maintainers:
 - Do **not** treat benchmark output as a substitute for passing tests — benchmarks explain behavior and performance, tests enforce correctness.
 - Run benchmarks when changing strategy logic, evaluation scenarios, or benchmark methodology; skip them for ordinary docs/config changes unless you are validating a performance claim.
 
+## Maintainer release guide
+
 ### Release smoke checks
 
 Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
@@ -143,6 +145,14 @@ For a published npm install check, use `.github/workflows/registry-smoke.yml`:
 - In the release path, the workflow resolves the package spec automatically from the release tag (for example `v0.1.5` → `jsx-ai@0.1.5`).
 - If you only pushed a tag but did not publish a GitHub Release, run the workflow manually instead.
 - If npm propagation is delayed, the workflow already retries automatically before failing.
+
+### Quick maintainer release flow
+
+Minimal merge-to-publish path:
+1. `bun install`
+2. `bun test`
+3. publish the package
+4. confirm the release-triggered or manually dispatched **Registry smoke** workflow passes for the published version
 
 ### Release checklist
 
@@ -157,14 +167,6 @@ Before or during a release:
    - rely on the release-triggered `registry-smoke.yml`, or
    - manually run **Registry smoke** with `jsx-ai@latest` or the exact version you just published.
 5. If the registry smoke check fails immediately after publish, wait for npm propagation and rerun the workflow.
-
-### Quick maintainer release flow
-
-Minimal merge-to-publish path:
-1. `bun install`
-2. `bun test`
-3. publish the package
-4. confirm the release-triggered or manually dispatched **Registry smoke** workflow passes for the published version
 
 ### Version bump expectations
 
