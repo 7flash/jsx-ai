@@ -158,6 +158,14 @@ Before or during a release:
    - manually run **Registry smoke** with `jsx-ai@latest` or the exact version you just published.
 5. If the registry smoke check fails immediately after publish, wait for npm propagation and rerun the workflow.
 
+### Quick maintainer release flow
+
+Minimal merge-to-publish path:
+1. `bun install`
+2. `bun test`
+3. publish the package
+4. confirm the release-triggered or manually dispatched **Registry smoke** workflow passes for the published version
+
 ## ✨ What You Get
 
 - **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name
