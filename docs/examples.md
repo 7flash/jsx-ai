@@ -106,6 +106,23 @@ What it shows:
 - local mock SSE server usage
 - OpenAI-compatible streaming path without external credentials
 
+### `examples/providers.tsx`
+
+A runnable provider-specific usage demo.
+
+Run it with:
+
+```sh
+bun run examples/providers.tsx
+```
+
+What it shows:
+- Gemini request/response flow
+- OpenAI-compatible request/response flow
+- Anthropic request/response flow
+- explicit `provider="openai"` override on a prompt
+- mocked `fetch` responses for each provider path
+
 ## When to use examples vs guides
 
 - Use the example files when you want runnable code you can copy/adapt.
