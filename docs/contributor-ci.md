@@ -1,5 +1,7 @@
 # Contributor CI & Test Guide
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## CI map
 
 For contributors/maintainers:

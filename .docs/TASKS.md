@@ -76,7 +76,8 @@
 - [x] ~~**Consider docs index backlink from examples/quickstart sections**~~ — ✅ DONE. Added lightweight top-of-page backlinks in `docs/quickstart.md` and `docs/examples.md` so readers can jump back to the docs index from high-traffic guides.
 - [x] ~~**Consider docs index backlink from provider snippets/API reference**~~ — ✅ DONE. Added the same top-of-page docs-index backlink pattern to `docs/provider-snippets.md` and `docs/api-reference.md` for more consistent navigation across entry docs.
 - [x] ~~**Consider docs index backlink from configuration/troubleshooting**~~ — ✅ DONE. Added the same top-of-page docs-index backlink pattern to `docs/configuration.md` and `docs/troubleshooting.md` so the common support guides match the rest of the docs set.
-- [ ] **Consider docs index backlink sweep for remaining guides** — The next useful docs pass is checking whether architecture/extensibility/contributor/maintainer guides should use the same top-of-page backlink pattern too.
+- [x] ~~**Consider docs index backlink sweep for remaining guides**~~ — ✅ DONE. Added the same top-of-page docs-index backlink pattern to `docs/architecture.md`, `docs/extensibility.md`, `docs/contributor-ci.md`, and `docs/maintainer-release.md` so the full docs set now shares one navigation convention.
+- [ ] **Consider docs index nav note inside docs index itself** — The next useful docs pass is checking whether `docs/README.md` should briefly explain that individual guides link back here as the central hub.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

@@ -1,5 +1,7 @@
 # Package Architecture
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## High-level structure
 
 `jsx-ai` is organized around a small pipeline:

@@ -2,6 +2,8 @@
 
 This guide explains how to extend `jsx-ai` without modifying the core package.
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## Main extension points
 
 The public package surface exposes three primary customization hooks:

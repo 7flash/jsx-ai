@@ -1,5 +1,7 @@
 # Maintainer Release Guide
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 Workflow links:
 - [Main test workflow (`.github/workflows/test.yml`)](https://github.com/7flash/jsx-ai/actions/workflows/test.yml)
 - [Registry smoke workflow (`.github/workflows/registry-smoke.yml`)](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml)
