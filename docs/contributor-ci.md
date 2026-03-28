@@ -4,7 +4,7 @@
 
 For contributors/maintainers:
 - `.github/workflows/test.yml`
-  - **Unit tests** job → `bun run test:unit`
+  - **Unit tests** job → `bun run test:unit` (always runs; intentionally not path-filtered)
   - **Consumer smoke test** job → `bun run test:smoke` (runs only when packaging/export-related files change)
   - **Docs snippet smoke test** job → `bun run test:docs` (runs only when docs/package/export-related files change)
 - `.github/workflows/registry-smoke.yml`
@@ -15,6 +15,7 @@ For contributors/maintainers:
 
 - Use `bun test` when you want the full local confidence pass before merging or publishing.
 - Use `bun run test:unit` when you are iterating on library internals and want the fast unit/provider/strategy suite.
+- In CI, the unit test job intentionally always runs; unlike smoke jobs, it is not path-filtered because core correctness can be affected by changes that are hard to scope safely.
 - Use `bun run test:smoke` when you changed packaging, exports, README install guidance, or consumer-facing entrypoints.
 - Use `bun run test:docs` when you changed quickstart/provider/docs snippets and want to verify the guide code still runs in a clean consumer project.
 - Use the **Registry smoke** workflow / `bun run test:smoke:registry` when you need to validate an actually published npm package version.

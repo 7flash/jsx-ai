@@ -43,6 +43,10 @@ jobs:
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    # Intentionally always runs: unit coverage protects core correctness across
+    # runtime, extraction, strategies, providers, skills, and streaming.
+    # We do not path-filter this job to avoid missing regressions from seemingly
+    # unrelated changes.
     steps:
       - name: Capture start time
         run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"

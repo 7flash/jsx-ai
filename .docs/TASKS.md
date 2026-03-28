@@ -66,7 +66,8 @@
 - [x] ~~**Add docs verification to CI**~~ — ✅ DONE. Added a dedicated `Docs snippet smoke test` job to `.github/workflows/test.yml` so guide-snippet drift gets its own visible status check.
 - [x] ~~**Consider path-filtering or job-scope tuning for docs smoke**~~ — ✅ DONE. Added a small change-detection job in `.github/workflows/test.yml` so docs smoke runs only for docs/package/export-related changes.
 - [x] ~~**Consider path-filtering for consumer smoke too**~~ — ✅ DONE. Extended the same change-detection job so consumer smoke runs only for packaging/export-relevant changes.
-- [ ] **Consider path-filtering for unit tests** — The next useful CI pass is deciding whether unit tests should always run or whether any safe scope reduction exists without weakening correctness checks.
+- [x] ~~**Consider path-filtering for unit tests**~~ — ✅ DONE. Chose to keep unit tests always-on and documented that decision in the workflow plus contributor CI guide because unit regressions are not safely scope-reducible.
+- [ ] **Consider consolidating CI change detection docs** — The next useful pass is documenting the exact path-filter rules and rationale in one concise CI section so maintainers can update them confidently.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
