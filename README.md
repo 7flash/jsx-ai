@@ -12,6 +12,7 @@ Badge guide:
 - `release-validation / registry_smoke` → manual/release registry-install validation workflow
 
 Start here:
+- [Docs index](docs/README.md)
 - [Quickstart](docs/quickstart.md)
 - [Provider starter snippets](docs/provider-snippets.md)
 - [What you get](#-what-you-get)
@@ -23,9 +24,10 @@ Start here:
 Build and extend:
 - [Architecture guide](docs/architecture.md)
 - [Extension & customization guide](docs/extensibility.md)
-- [Docs index](docs/README.md)
+- [Examples guide](docs/examples.md)
 
 Contribute and maintain:
+- [Docs index](docs/README.md)
 - [Development](#development)
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)

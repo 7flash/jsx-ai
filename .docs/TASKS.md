@@ -72,7 +72,8 @@
 - [x] ~~**Consider workflow comments for registry smoke rationale**~~ — ✅ DONE. Added inline comments in `.github/workflows/registry-smoke.yml` explaining why the workflow is manual/release-only and how release tags resolve to npm package specs.
 - [x] ~~**Consider CI docs cross-link from maintainer release guide**~~ — ✅ DONE. Added direct contributor-CI/doc-index pointers inside `docs/maintainer-release.md` so workflow sections link back to CI job behavior docs.
 - [x] ~~**Consider top-level docs index link from README release note**~~ — ✅ DONE. Updated the README release/maintainer note text so both pointers route readers through the docs index before the release guide.
-- [ ] **Consider README quick links grouping polish** — The next useful docs pass is checking whether the top-level README groups should surface the docs index more prominently alongside quickstart and maintainer links.
+- [x] ~~**Consider README quick links grouping polish**~~ — ✅ DONE. Promoted `docs/README.md` into the README quick-link groups so both new readers and maintainers see the docs index as the central guide map.
+- [ ] **Consider docs index backlink from examples/quickstart sections** — The next useful docs pass is checking whether individual high-traffic guides should point back to `docs/README.md` more explicitly near their top sections.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
