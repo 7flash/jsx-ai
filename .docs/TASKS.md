@@ -60,7 +60,8 @@
 - [x] ~~**Add top-level quickstart guide**~~ — ✅ DONE. Added `docs/quickstart.md` and linked it from the README plus docs index for a minimal install → config → first `callLLM()` path.
 - [x] ~~**Add copy-paste code snippets for provider choices**~~ — ✅ DONE. Added `docs/provider-snippets.md` with minimal Gemini, OpenAI-compatible, Anthropic, text-only, and streaming starter snippets.
 - [x] ~~**Add README/API consistency pass**~~ — ✅ DONE. Reconciled README/docs with the typed API by documenting `<prompt provider="...">`, broadening provider override docs, correcting strategy descriptions, and aligning extraction/tests around the public `provider` field.
-- [ ] **Add export surface smoke coverage for docs examples** — The next useful pass is lightweight coverage that the documented JSX props and exported entrypoints used in guides remain valid for consumers.
+- [x] ~~**Add export surface smoke coverage for docs examples**~~ — ✅ DONE. Expanded `src/consumer-smoke.test.ts` to validate the documented consumer-facing exports and JSX prompt props used across the guides.
+- [ ] **Add guide-snippet verification strategy** — The next useful pass is deciding how to keep important docs snippets executable or linted so drift is caught earlier than manual docs review.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

@@ -132,7 +132,7 @@ declare global {
             param: { name: string; type?: string; required?: boolean; enum?: string[]; children?: any }
             message: { role: "user" | "assistant" | "tool"; children?: any }
             system: { children?: any }
-            prompt: { model?: string; temperature?: number; maxTokens?: number; strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"; children?: any }
+            prompt: { model?: string; provider?: string; temperature?: number; maxTokens?: number; strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"; children?: any }
         }
         // Removed `type Element = JsxAiNode` — causes TS2300 in consuming projects
         // that also declare JSX.Element (React, DOM lib, etc.)

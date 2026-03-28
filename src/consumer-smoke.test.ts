@@ -5,24 +5,37 @@ import { tmpdir } from "os"
 
 const repoRoot = join(import.meta.dir, "..").replace(/\\/g, "/")
 const smokeSource = `
-import { callLLM, GeminiProvider } from "jsx-ai"
+import { callLLM, callText, streamLLM, render, GeminiProvider, OpenAIProvider, AnthropicProvider, Skill, UseSkillTool, resolveSkills, native, xml, natural, nlt, hybrid } from "jsx-ai"
 import { jsx, jsxs, Fragment } from "jsx-ai/jsx-runtime"
 import { jsxDEV } from "jsx-ai/jsx-dev-runtime"
 
 const tree = jsx("prompt", {
   model: "gpt-4o",
+  provider: "openai",
+  strategy: "xml",
   children: [
     jsx("system", { children: "You are helpful" }),
     jsx("message", { role: "user", children: "hi" }),
   ],
 })
 
+const extracted = render(tree)
+
 if (typeof callLLM !== "function") throw new Error("callLLM export missing")
+if (typeof callText !== "function") throw new Error("callText export missing")
+if (typeof streamLLM !== "function") throw new Error("streamLLM export missing")
+if (typeof render !== "function") throw new Error("render export missing")
+if (typeof Skill !== "function" || typeof UseSkillTool !== "function" || typeof resolveSkills !== "function") throw new Error("skills exports missing")
+if (typeof native?.prepare !== "function" || typeof xml?.prepare !== "function" || typeof natural?.prepare !== "function" || typeof nlt?.prepare !== "function" || typeof hybrid?.prepare !== "function") throw new Error("strategy exports missing")
 if (typeof jsx !== "function" || typeof jsxs !== "function") throw new Error("jsx runtime exports missing")
 if (typeof jsxDEV !== "function") throw new Error("jsx dev runtime export missing")
 if (typeof Fragment !== "function") throw new Error("Fragment export missing")
-if (!(new GeminiProvider()).name) throw new Error("provider export missing")
+if (!(new GeminiProvider()).name || !(new OpenAIProvider()).name || !(new AnthropicProvider()).name) throw new Error("provider exports missing")
 if (tree.type !== "prompt") throw new Error("runtime import did not create prompt")
+if (tree.props.provider !== "openai") throw new Error("prompt provider prop mismatch")
+if (tree.props.strategy !== "xml") throw new Error("prompt strategy prop mismatch")
+if (extracted.model !== "gpt-4o") throw new Error("render model mismatch")
+if (extracted.strategy !== "xml") throw new Error("render strategy mismatch")
 console.log("ok")
 `
 
