@@ -63,7 +63,8 @@
 - [x] ~~**Add export surface smoke coverage for docs examples**~~ — ✅ DONE. Expanded `src/consumer-smoke.test.ts` to validate the documented consumer-facing exports and JSX prompt props used across the guides.
 - [x] ~~**Add guide-snippet verification strategy**~~ — ✅ DONE. Added `src/docs-snippets.test.ts` plus `bun run test:docs` to keep important quickstart/provider/API snippets runnable in a clean consumer project.
 - [x] ~~**Add packed-tarball docs-snippet coverage**~~ — ✅ DONE. Extended `src/docs-snippets.test.ts` so the same guide snippets are verified against both `file:` installs and the packed publish artifact.
-- [ ] **Add docs verification to CI** — The next useful pass is deciding whether `test:docs` should run in the main workflow, a separate job, or only for docs/package changes.
+- [x] ~~**Add docs verification to CI**~~ — ✅ DONE. Added a dedicated `Docs snippet smoke test` job to `.github/workflows/test.yml` so guide-snippet drift gets its own visible status check.
+- [ ] **Consider path-filtering or job-scope tuning for docs smoke** — The next useful CI pass is deciding whether docs smoke should always run or only for docs/package/export changes.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

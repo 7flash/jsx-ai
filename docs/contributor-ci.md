@@ -6,6 +6,7 @@ For contributors/maintainers:
 - `.github/workflows/test.yml`
   - **Unit tests** job → `bun run test:unit`
   - **Consumer smoke test** job → `bun run test:smoke`
+  - **Docs snippet smoke test** job → `bun run test:docs`
 - `.github/workflows/registry-smoke.yml`
   - **Registry install smoke test** → `bun run test:smoke:registry`
   - used for manual registry validation and release-triggered publish verification
