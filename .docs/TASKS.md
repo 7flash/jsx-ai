@@ -56,7 +56,8 @@
 - [x] ~~**Add compatibility/config docs**~~ — ✅ DONE. Added `docs/configuration.md` covering env vars, provider detection, `.config.toml`, explorer telemetry, and OpenAI-compatible base URL overrides.
 - [x] ~~**Add troubleshooting guide**~~ — ✅ DONE. Added `docs/troubleshooting.md` and linked it from the README/docs index for API key, provider routing, skills, streaming, and smoke-test debugging.
 - [x] ~~**Add docs landing-page polish**~~ — ✅ DONE. Reworked `README.md` and `docs/README.md` into clearer “start here / build and extend / contribute and maintain” entry flows.
-- [ ] **Add docs cross-links between guides** — The next useful docs pass is tightening related-guide links inside each guide so readers can navigate laterally without returning to the index.
+- [x] ~~**Add docs cross-links between guides**~~ — ✅ DONE. Added or expanded “Related guides” sections across the main docs so readers can move laterally without returning to the docs index.
+- [ ] **Add top-level quickstart guide** — The next useful docs gap is a short “start in 5 minutes” guide that connects install, first `callLLM()`, config, and examples in one minimal path.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

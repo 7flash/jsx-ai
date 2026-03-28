@@ -57,3 +57,10 @@ After registry smoke passes, quickly confirm:
 - the GitHub release/tag matches the published version
 - README install/release examples do not reference an older version accidentally
 - the main CI and registry smoke links both point to healthy recent runs
+
+## Related guides
+
+- [Contributor CI & test guide](./contributor-ci.md)
+- [Troubleshooting guide](./troubleshooting.md)
+- [Configuration & compatibility guide](./configuration.md)
+- [Examples guide](./examples.md)

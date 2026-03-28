@@ -118,3 +118,11 @@ This keeps the public API simple while still allowing explicit provider override
 - Use `docs/contributor-ci.md` for test/CI workflow choice
 - Use `docs/maintainer-release.md` for publish/release workflow
 - Use this file when changing package internals, adding strategies/providers, or tracing request flow
+
+## Related guides
+
+- [API reference](./api-reference.md)
+- [Examples guide](./examples.md)
+- [Extension & customization guide](./extensibility.md)
+- [Configuration & compatibility guide](./configuration.md)
+- [Contributor CI & test guide](./contributor-ci.md)

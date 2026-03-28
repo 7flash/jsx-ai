@@ -160,3 +160,11 @@ What it shows:
 - Use `docs/extensibility.md` when you want to add custom providers, strategies, or hooks.
 - Use `docs/contributor-ci.md` for test/CI workflow guidance.
 - Use `docs/maintainer-release.md` for publishing and release validation.
+
+## Related guides
+
+- [API reference](./api-reference.md)
+- [Configuration & compatibility guide](./configuration.md)
+- [Troubleshooting guide](./troubleshooting.md)
+- [Extension & customization guide](./extensibility.md)
+- [Architecture guide](./architecture.md)

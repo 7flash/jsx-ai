@@ -192,8 +192,11 @@ Choose a **hook** if:
 - you only need observability/logging/analytics
 - you do not want to affect model request semantics
 
-## Related docs
+## Related guides
 
+- [API reference](./api-reference.md)
+- [Examples guide](./examples.md)
 - [Architecture guide](./architecture.md)
+- [Configuration & compatibility guide](./configuration.md)
 - [Contributor CI & test guide](./contributor-ci.md)
 - [Maintainer release guide](./maintainer-release.md)

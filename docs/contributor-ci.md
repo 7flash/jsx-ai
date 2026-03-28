@@ -24,3 +24,11 @@ For contributors/maintainers:
 - Use `bun run bench/strategies.ts` when you are comparing strategy behavior, prompt formats, or agentic quality/performance tradeoffs.
 - Do **not** treat benchmark output as a substitute for passing tests — benchmarks explain behavior and performance, tests enforce correctness.
 - Run benchmarks when changing strategy logic, evaluation scenarios, or benchmark methodology; skip them for ordinary docs/config changes unless you are validating a performance claim.
+
+## Related guides
+
+- [Troubleshooting guide](./troubleshooting.md)
+- [Configuration & compatibility guide](./configuration.md)
+- [Architecture guide](./architecture.md)
+- [Examples guide](./examples.md)
+- [Maintainer release guide](./maintainer-release.md)
