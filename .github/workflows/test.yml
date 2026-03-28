@@ -5,7 +5,10 @@ on:
     branches:
       - main
       - master
+      - 'release/**'
       - 'emdash/**'
+    tags:
+      - 'v*'
   pull_request:
 
 jobs:
