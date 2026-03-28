@@ -138,6 +138,21 @@ What it shows:
 - how each strategy parses representative provider responses
 - the difference between native tool calls and text-encoded tool calls
 
+### `examples/natural-strategy.tsx`
+
+A focused runnable demo for the standalone `natural` strategy.
+
+Run it with:
+
+```sh
+bun run examples/natural-strategy.tsx
+```
+
+What it shows:
+- the natural-language system prompt generated for tools
+- the `THINKING` / `TOOL_CALL` / `PARAM` / `END_CALL` response format
+- how the `natural` strategy parses plain-text tool calls
+
 ## When to use examples vs guides
 
 - Use the example files when you want runnable code you can copy/adapt.
