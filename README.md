@@ -116,6 +116,14 @@ For contributors/maintainers:
   - **Registry install smoke test** → `bun run test:smoke:registry`
   - used for manual registry validation and release-triggered publish verification
 
+### Which test path to use
+
+- Use `bun test` when you want the full local confidence pass before merging or publishing.
+- Use `bun run test:unit` when you are iterating on library internals and want the fast unit/provider/strategy suite.
+- Use `bun run test:smoke` when you changed packaging, exports, README install guidance, or consumer-facing entrypoints.
+- Use the **Registry smoke** workflow / `bun run test:smoke:registry` when you need to validate an actually published npm package version.
+- Use CI/workflow dispatch when you want the same environment GitHub sees, especially for release validation and post-publish checks.
+
 ### Release smoke checks
 
 Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
