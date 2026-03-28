@@ -64,7 +64,8 @@
 - [x] ~~**Add guide-snippet verification strategy**~~ — ✅ DONE. Added `src/docs-snippets.test.ts` plus `bun run test:docs` to keep important quickstart/provider/API snippets runnable in a clean consumer project.
 - [x] ~~**Add packed-tarball docs-snippet coverage**~~ — ✅ DONE. Extended `src/docs-snippets.test.ts` so the same guide snippets are verified against both `file:` installs and the packed publish artifact.
 - [x] ~~**Add docs verification to CI**~~ — ✅ DONE. Added a dedicated `Docs snippet smoke test` job to `.github/workflows/test.yml` so guide-snippet drift gets its own visible status check.
-- [ ] **Consider path-filtering or job-scope tuning for docs smoke** — The next useful CI pass is deciding whether docs smoke should always run or only for docs/package/export changes.
+- [x] ~~**Consider path-filtering or job-scope tuning for docs smoke**~~ — ✅ DONE. Added a small change-detection job in `.github/workflows/test.yml` so docs smoke runs only for docs/package/export-related changes.
+- [ ] **Consider path-filtering for consumer smoke too** — The next useful CI pass is deciding whether the consumer smoke job should also be scope-limited for non-packaging changes.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
