@@ -724,7 +724,46 @@ describe("resolveSkills", () => {
 //   STREAM LLM TESTS
 // ═══════════════════════════════════════════════════════════════════
 
-import { streamLLM } from "./llm"
+import { streamLLM, callLLM, __setMeasureModuleLoaderForTests } from "./llm"
+
+describe("callLLM", () => {
+    test("falls back when optional telemetry module is unavailable", async () => {
+        const originalFetch = globalThis.fetch
+        const originalApiKey = process.env.OPENAI_API_KEY
+
+        __setMeasureModuleLoaderForTests(async () => {
+            throw new Error("measure-fn not installed")
+        })
+
+        globalThis.fetch = async () => new Response(JSON.stringify({
+            choices: [{ message: { content: "ok" } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+        })
+
+        process.env.OPENAI_API_KEY = "test-key"
+
+        try {
+            const result = await callLLM(
+                h("prompt", {
+                    model: "gpt-4o",
+                    children: [
+                        h("message", { role: "user", children: "hi" }),
+                    ],
+                })
+            )
+
+            expect(result.text).toBe("ok")
+        } finally {
+            __setMeasureModuleLoaderForTests()
+            globalThis.fetch = originalFetch
+            if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY
+            else process.env.OPENAI_API_KEY = originalApiKey
+        }
+    })
+})
 
 describe("streamLLM", () => {
     let server: ReturnType<typeof Bun.serve> | null = null

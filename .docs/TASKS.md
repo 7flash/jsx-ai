@@ -7,8 +7,9 @@
 - [x] ~~**Unblock test suite from missing dependency install**~~ — ✅ DONE. Installed repo dependencies and verified `bun test` passes locally (46 passing).
 - [x] ~~**Add CI test workflow**~~ — ✅ DONE. Added GitHub Actions workflow to run `bun install --frozen-lockfile` and `bun test` on pushes and pull requests.
 - [x] ~~**Audit dependency usage**~~ — ✅ DONE. Replaced the hard runtime import of `measure-fn` with a safe dynamic fallback in `src/llm.ts` and removed it from direct package dependencies.
+- [x] ~~**Add explicit fallback test for optional telemetry import**~~ — ✅ DONE. Added a regression test that forces the telemetry loader to fail and verifies `callLLM` still succeeds.
 - [ ] **Add branch coverage for release branches** — Decide whether the test workflow should also run on version tags or release branches.
-- [ ] **Add explicit fallback test for optional telemetry import** — Verify `callLLM` still works when `measure-fn` is unavailable in a clean consumer install.
+- [ ] **Hide test-only telemetry loader hook from public API docs** — Keep the fallback test seam internal-facing and avoid accidental consumer use.
 
 ## 🟢 Priority: Features
 - [ ] **Add smoke tests for package consumer import paths** — Verify `jsx-ai`, `jsx-runtime`, and provider exports work from a clean consumer project.
@@ -20,6 +21,7 @@
 - Main test file currently discovered: `src/index.test.ts`
 - LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`
 - `src/llm.ts` now treats `measure-fn` as optional telemetry by using a dynamic import fallback around fetch measurement.
+- `src/llm.ts` includes a test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs Bun install + tests on push and pull_request
 
 ## ⚠️ Security Reminders

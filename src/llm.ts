@@ -192,9 +192,20 @@ function resolveApiKey(provider: Provider, options?: CallOptions): string {
  * result.toolCalls  // [{ name: "exec", args: { command: "ls" } }]
  * ```
  */
+type MeasureModule = { measure?: <T>(label: string, fn: () => Promise<T>) => Promise<T> }
+
+type MeasureModuleLoader = () => Promise<MeasureModule>
+
+const defaultMeasureModuleLoader: MeasureModuleLoader = () => import("measure-fn")
+let measureModuleLoader: MeasureModuleLoader = defaultMeasureModuleLoader
+
+export function __setMeasureModuleLoaderForTests(loader?: MeasureModuleLoader): void {
+    measureModuleLoader = loader || defaultMeasureModuleLoader
+}
+
 async function measureAsync<T>(label: string, fn: () => Promise<T>): Promise<T> {
     try {
-        const mod = await import("measure-fn")
+        const mod = await measureModuleLoader()
         if (typeof mod.measure === "function") return await mod.measure(label, fn)
     } catch { }
     return await fn()
