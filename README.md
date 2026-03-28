@@ -3,8 +3,11 @@
 [![npm](https://img.shields.io/npm/v/jsx-ai.svg?style=flat-square)](https://www.npmjs.com/package/jsx-ai)
 [![bundle](https://img.shields.io/bundlephobia/minzip/jsx-ai?style=flat-square&label=size)](https://bundlephobia.com/package/jsx-ai)
 [![test](https://img.shields.io/github/actions/workflow/status/7flash/jsx-ai/test.yml?branch=main&style=flat-square&label=test)](https://github.com/7flash/jsx-ai/actions/workflows/test.yml)
+[![registry smoke](https://img.shields.io/badge/release-validation-registry_smoke-blue?style=flat-square)](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml)
 
 JSX interface for structured LLM calls. Tools, messages, and prompts become composable components.
+
+> Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml) and the [release checklist](#release-checklist).
 
 ```tsx
 import { callLLM } from "jsx-ai"
