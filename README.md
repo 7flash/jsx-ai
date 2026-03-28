@@ -176,6 +176,15 @@ Minimal merge-to-publish path:
 - Treat registry smoke as validation of the version you actually published, not just the branch state you tested locally.
 - If you publish a different version than the current tag or README examples imply, update those references before or immediately after release.
 
+### Post-release verification
+
+After registry smoke passes, quickly confirm:
+- the npm package page shows the expected version
+- the npm badge at the top of this README reflects that version
+- the GitHub release/tag matches the published version
+- README install/release examples do not reference an older version accidentally
+- the main CI and registry smoke links both point to healthy recent runs
+
 ## ✨ What You Get
 
 - **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name
