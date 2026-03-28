@@ -166,6 +166,16 @@ Minimal merge-to-publish path:
 3. publish the package
 4. confirm the release-triggered or manually dispatched **Registry smoke** workflow passes for the published version
 
+### Version bump expectations
+
+- Bump `package.json` to the exact version you intend to publish before creating the release.
+- Keep the npm version, git tag, and registry smoke target aligned:
+  - `package.json` version `0.1.5`
+  - release tag `v0.1.5`
+  - registry smoke target `jsx-ai@0.1.5`
+- Treat registry smoke as validation of the version you actually published, not just the branch state you tested locally.
+- If you publish a different version than the current tag or README examples imply, update those references before or immediately after release.
+
 ## ✨ What You Get
 
 - **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name
