@@ -2,6 +2,8 @@
 
 This is a concise reference for the main public exports from `jsx-ai`.
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## Core runtime
 
 ### `callLLM(tree, options?)`

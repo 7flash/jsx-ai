@@ -2,6 +2,8 @@
 
 Copy-paste starter examples for the most common provider choices.
 
+Need the broader guide map? Jump back to the [docs index](./README.md).
+
 ## Gemini
 
 Environment:

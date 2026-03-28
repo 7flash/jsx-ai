@@ -74,7 +74,8 @@
 - [x] ~~**Consider top-level docs index link from README release note**~~ — ✅ DONE. Updated the README release/maintainer note text so both pointers route readers through the docs index before the release guide.
 - [x] ~~**Consider README quick links grouping polish**~~ — ✅ DONE. Promoted `docs/README.md` into the README quick-link groups so both new readers and maintainers see the docs index as the central guide map.
 - [x] ~~**Consider docs index backlink from examples/quickstart sections**~~ — ✅ DONE. Added lightweight top-of-page backlinks in `docs/quickstart.md` and `docs/examples.md` so readers can jump back to the docs index from high-traffic guides.
-- [ ] **Consider docs index backlink from provider snippets/API reference** — The next useful docs pass is checking whether other high-traffic reference pages should mirror the same top-of-page docs-index pattern.
+- [x] ~~**Consider docs index backlink from provider snippets/API reference**~~ — ✅ DONE. Added the same top-of-page docs-index backlink pattern to `docs/provider-snippets.md` and `docs/api-reference.md` for more consistent navigation across entry docs.
+- [ ] **Consider docs index backlink from configuration/troubleshooting** — The next useful docs pass is checking whether the remaining common support guides should mirror the same top-of-page docs-index pattern.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
