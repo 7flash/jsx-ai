@@ -27,11 +27,15 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
+            # Consumer smoke protects packaging/export surface and install guidance.
+            # Keep this focused on files that can affect consumers or package shape.
             consumer_relevant:
               - 'package.json'
               - 'src/**'
               - 'tsconfig.json'
               - 'README.md'
+            # Docs snippet smoke protects runnable guide snippets.
+            # Include docs/examples directly plus package/export/runtime inputs that can break them indirectly.
             docs_relevant:
               - 'README.md'
               - 'docs/**'

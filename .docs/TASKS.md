@@ -68,7 +68,8 @@
 - [x] ~~**Consider path-filtering for consumer smoke too**~~ — ✅ DONE. Extended the same change-detection job so consumer smoke runs only for packaging/export-relevant changes.
 - [x] ~~**Consider path-filtering for unit tests**~~ — ✅ DONE. Chose to keep unit tests always-on and documented that decision in the workflow plus contributor CI guide because unit regressions are not safely scope-reducible.
 - [x] ~~**Consider consolidating CI change detection docs**~~ — ✅ DONE. Added a dedicated CI change-detection section to `docs/contributor-ci.md` covering exact path filters, rationale, and update rules.
-- [ ] **Consider workflow comments for path filters** — The next useful pass is mirroring the CI doc rationale with brief inline comments near the workflow filter blocks for maintainers editing YAML directly.
+- [x] ~~**Consider workflow comments for path filters**~~ — ✅ DONE. Added brief inline comments near the workflow filter blocks so YAML editors can see the consumer/docs smoke scope rationale immediately.
+- [ ] **Consider workflow comments for registry smoke rationale** — The next useful pass is mirroring the manual/release-only reasoning inline in `.github/workflows/registry-smoke.yml` too.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
