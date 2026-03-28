@@ -15,6 +15,7 @@ For contributors/maintainers:
 - Use `bun test` when you want the full local confidence pass before merging or publishing.
 - Use `bun run test:unit` when you are iterating on library internals and want the fast unit/provider/strategy suite.
 - Use `bun run test:smoke` when you changed packaging, exports, README install guidance, or consumer-facing entrypoints.
+- Use `bun run test:docs` when you changed quickstart/provider/docs snippets and want to verify the guide code still runs in a clean consumer project.
 - Use the **Registry smoke** workflow / `bun run test:smoke:registry` when you need to validate an actually published npm package version.
 - Use CI/workflow dispatch when you want the same environment GitHub sees, especially for release validation and post-publish checks.
 

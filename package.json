@@ -14,6 +14,7 @@
     "test": "bun test",
     "test:unit": "bun test src/index.test.ts",
     "test:smoke": "bun test src/consumer-smoke.test.ts",
+    "test:docs": "bun test src/docs-snippets.test.ts",
     "test:smoke:registry": "bun test src/registry-smoke.test.ts",
     "bench": "bun run bench/strategies.ts"
   },

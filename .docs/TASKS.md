@@ -61,13 +61,14 @@
 - [x] ~~**Add copy-paste code snippets for provider choices**~~ — ✅ DONE. Added `docs/provider-snippets.md` with minimal Gemini, OpenAI-compatible, Anthropic, text-only, and streaming starter snippets.
 - [x] ~~**Add README/API consistency pass**~~ — ✅ DONE. Reconciled README/docs with the typed API by documenting `<prompt provider="...">`, broadening provider override docs, correcting strategy descriptions, and aligning extraction/tests around the public `provider` field.
 - [x] ~~**Add export surface smoke coverage for docs examples**~~ — ✅ DONE. Expanded `src/consumer-smoke.test.ts` to validate the documented consumer-facing exports and JSX prompt props used across the guides.
-- [ ] **Add guide-snippet verification strategy** — The next useful pass is deciding how to keep important docs snippets executable or linted so drift is caught earlier than manual docs review.
+- [x] ~~**Add guide-snippet verification strategy**~~ — ✅ DONE. Added `src/docs-snippets.test.ts` plus `bun run test:docs` to keep important quickstart/provider/API snippets runnable in a clean consumer project.
+- [ ] **Add packed-tarball docs-snippet coverage** — The next useful pass is deciding whether the docs-snippet smoke path should also validate the packed publish artifact, not just `file:` installs.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
 - Test command: `bun test`
-- Focused scripts: `bun run test:unit`, `bun run test:smoke`, `bun run test:smoke:registry`
-- Current local suite status: 50 passing tests across unit + smoke coverage.
+- Focused scripts: `bun run test:unit`, `bun run test:smoke`, `bun run test:docs`, `bun run test:smoke:registry`
+- Current local suite status: 51 passing tests across unit + smoke coverage.
 - Bench command: `bun run bench/strategies.ts`
 - Main test file currently discovered: `src/index.test.ts`
 - LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`; provider overrides are supported via both `CallOptions.provider` and `<prompt provider="...">`.
