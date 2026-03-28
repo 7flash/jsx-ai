@@ -35,7 +35,8 @@
 - [x] ~~**Document version bump expectations**~~ — ✅ DONE. Added README guidance aligning `package.json`, release tags, published npm versions, and registry smoke targets.
 - [x] ~~**Document post-release verification expectations**~~ — ✅ DONE. Added a README post-release verification checklist covering npm visibility, badges, release/tag alignment, and example freshness.
 - [x] ~~**Consolidate release guidance into a dedicated maintainer section**~~ — ✅ DONE. Grouped release smoke, checklist, version alignment, and post-release verification under a dedicated `Maintainer release guide` section in the README.
-- [ ] **Add dedicated anchors/TOC hints for maintainer docs** — Make the new maintainer section easier to jump to from the top of the README.
+- [x] ~~**Add dedicated anchors/TOC hints for maintainer docs**~~ — ✅ DONE. Added top-of-README quick links pointing to Development, Maintainer release guide, and feature overview sections.
+- [ ] **Add release workflow links inside the maintainer section** — Link directly to `test.yml` and `registry-smoke.yml` from the maintainer guide itself.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -49,7 +50,7 @@
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
 - Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware summary with run links.
-- README now includes a dedicated `Maintainer release guide` section covering when to run the manual registry workflow, how to choose the package spec, which release events auto-trigger registry smoke, a short release checklist, a top-level registry smoke link, a badge guide, a contributor-facing CI map, guidance on choosing local vs CI test paths, benchmark-vs-test expectations, a quick maintainer release flow, version bump expectations, and post-release verification.
+- README now includes a dedicated `Maintainer release guide` section covering when to run the manual registry workflow, how to choose the package spec, which release events auto-trigger registry smoke, a short release checklist, a top-level registry smoke link, a badge guide, top-level quick links, a contributor-facing CI map, guidance on choosing local vs CI test paths, benchmark-vs-test expectations, a quick maintainer release flow, version bump expectations, and post-release verification.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
 - Registry smoke coverage lives in `src/registry-smoke.test.ts`, uses `REGISTRY_SMOKE_SPEC`, and now performs an npm metadata preflight so missing versions fail with actionable diagnostics.
 

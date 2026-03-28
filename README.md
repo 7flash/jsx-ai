@@ -11,6 +11,11 @@ Badge guide:
 - `test` → main CI workflow status for unit + consumer smoke coverage
 - `release-validation / registry_smoke` → manual/release registry-install validation workflow
 
+Quick links:
+- [Development](#development)
+- [Maintainer release guide](#maintainer-release-guide)
+- [What you get](#-what-you-get)
+
 > Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml) and the [release checklist](#release-checklist).
 
 ```tsx
