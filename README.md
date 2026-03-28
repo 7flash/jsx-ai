@@ -16,6 +16,7 @@ Quick links:
 - [Docs index](docs/README.md)
 - [Architecture guide](docs/architecture.md)
 - [Examples guide](docs/examples.md)
+- [API reference](docs/api-reference.md)
 - [Extension & customization guide](docs/extensibility.md)
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)
