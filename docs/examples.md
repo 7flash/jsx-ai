@@ -1,5 +1,7 @@
 # Examples
 
+Looking for the broader guide map? Jump back to the [docs index](./README.md).
+
 ## Available example files
 
 ### `examples/coding-agent.tsx`

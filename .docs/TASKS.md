@@ -73,7 +73,8 @@
 - [x] ~~**Consider CI docs cross-link from maintainer release guide**~~ — ✅ DONE. Added direct contributor-CI/doc-index pointers inside `docs/maintainer-release.md` so workflow sections link back to CI job behavior docs.
 - [x] ~~**Consider top-level docs index link from README release note**~~ — ✅ DONE. Updated the README release/maintainer note text so both pointers route readers through the docs index before the release guide.
 - [x] ~~**Consider README quick links grouping polish**~~ — ✅ DONE. Promoted `docs/README.md` into the README quick-link groups so both new readers and maintainers see the docs index as the central guide map.
-- [ ] **Consider docs index backlink from examples/quickstart sections** — The next useful docs pass is checking whether individual high-traffic guides should point back to `docs/README.md` more explicitly near their top sections.
+- [x] ~~**Consider docs index backlink from examples/quickstart sections**~~ — ✅ DONE. Added lightweight top-of-page backlinks in `docs/quickstart.md` and `docs/examples.md` so readers can jump back to the docs index from high-traffic guides.
+- [ ] **Consider docs index backlink from provider snippets/API reference** — The next useful docs pass is checking whether other high-traffic reference pages should mirror the same top-of-page docs-index pattern.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

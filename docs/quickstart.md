@@ -2,6 +2,8 @@
 
 Get from install to your first `callLLM()` response in about 5 minutes.
 
+Need the full guide map instead? Start from the [docs index](./README.md).
+
 ## 1. Install
 
 ```sh
