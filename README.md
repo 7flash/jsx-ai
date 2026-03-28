@@ -412,6 +412,8 @@ After registry smoke passes, quickly confirm:
 - README install/release examples do not reference an older version accidentally
 - the main CI and registry smoke links both point to healthy recent runs
 
+> Maintainers: release/publish notes live in the [Maintainer release guide](#maintainer-release-guide).
+
 ## License
 
 MIT
