@@ -17,12 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGISTRY_SMOKE_SPEC: ${{ github.event_name == 'workflow_dispatch' && inputs.package_spec || '' }}
+      REGISTRY_SMOKE_RETRY_ATTEMPTS: '6'
+      REGISTRY_SMOKE_RETRY_DELAY_MS: '10000'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Print registry smoke target
-        run: echo "Registry smoke target: ${REGISTRY_SMOKE_SPEC:-pending-release-tag-resolution}"
+        run: |
+          echo "Registry smoke target: ${REGISTRY_SMOKE_SPEC:-pending-release-tag-resolution}"
+          echo "Registry smoke retry policy: ${REGISTRY_SMOKE_RETRY_ATTEMPTS} attempts, ${REGISTRY_SMOKE_RETRY_DELAY_MS}ms delay"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2

@@ -4,6 +4,8 @@ import { join } from "path"
 import { tmpdir } from "os"
 
 const registrySpec = process.env.REGISTRY_SMOKE_SPEC
+const retryAttempts = Number(process.env.REGISTRY_SMOKE_RETRY_ATTEMPTS || "1")
+const retryDelayMs = Number(process.env.REGISTRY_SMOKE_RETRY_DELAY_MS || "5000")
 const smokeSource = `
 import { callLLM, GeminiProvider } from "jsx-ai"
 import { jsx, jsxs, Fragment } from "jsx-ai/jsx-runtime"
@@ -83,6 +85,26 @@ async function assertRegistrySpecResolvable(spec: string): Promise<void> {
     )
 }
 
+async function assertRegistrySpecResolvableWithRetry(spec: string): Promise<void> {
+    let lastError: unknown
+
+    for (let attempt = 1; attempt <= retryAttempts; attempt++) {
+        try {
+            await assertRegistrySpecResolvable(spec)
+            return
+        } catch (error) {
+            lastError = error
+            if (attempt === retryAttempts) break
+            console.log(`[registry-smoke] ${spec} not ready yet (attempt ${attempt}/${retryAttempts}). Retrying in ${retryDelayMs}ms...`)
+            await Bun.sleep(retryDelayMs)
+        }
+    }
+
+    throw lastError instanceof Error
+        ? new Error(`${lastError.message} After ${retryAttempts} attempt(s) with ${retryDelayMs}ms backoff.`)
+        : lastError
+}
+
 describe("registry smoke", () => {
     if (!registrySpec) {
         test("skips when REGISTRY_SMOKE_SPEC is not set", () => {
@@ -91,11 +113,11 @@ describe("registry smoke", () => {
         return
     }
 
-    test(`installs and imports ${registrySpec} from the registry`, { timeout: 60000 }, async () => {
+    test(`installs and imports ${registrySpec} from the registry`, { timeout: 120000 }, async () => {
         const dir = mkdtempSync(join(tmpdir(), "jsx-ai-registry-smoke-"))
 
         try {
-            await assertRegistrySpecResolvable(registrySpec)
+            await assertRegistrySpecResolvableWithRetry(registrySpec)
 
             writeFileSync(join(dir, "package.json"), JSON.stringify({
                 name: "jsx-ai-registry-smoke",
