@@ -47,6 +47,22 @@ jobs:
       - name: Run registry smoke test
         run: bun run test:smoke:registry
 
+      - name: Write registry smoke summary
+        if: always()
+        run: |
+          {
+            echo "## Registry smoke test"
+            echo
+            echo "- Job: Registry install smoke test"
+            echo "- Event: ${GITHUB_EVENT_NAME}"
+            echo "- Ref: ${GITHUB_REF}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Package spec: ${REGISTRY_SMOKE_SPEC:-unresolved}"
+            echo "- Retry policy: ${REGISTRY_SMOKE_RETRY_ATTEMPTS} attempts, ${REGISTRY_SMOKE_RETRY_DELAY_MS}ms delay"
+            echo "- Command: \\`bun run test:smoke:registry\\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Registry smoke failure hint
         if: failure()
         run: |

@@ -30,6 +30,19 @@ jobs:
       - name: Run unit tests
         run: bun run test:unit
 
+      - name: Write unit test summary
+        if: always()
+        run: |
+          {
+            echo "## Unit tests"
+            echo
+            echo "- Job: Unit tests"
+            echo "- Ref: ${GITHUB_REF}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Command: \\`bun run test:unit\\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   consumer-smoke:
     name: Consumer smoke test
     runs-on: ubuntu-latest
@@ -47,3 +60,17 @@ jobs:
 
       - name: Run consumer smoke test
         run: bun run test:smoke
+
+      - name: Write consumer smoke summary
+        if: always()
+        run: |
+          {
+            echo "## Consumer smoke test"
+            echo
+            echo "- Job: Consumer smoke test"
+            echo "- Ref: ${GITHUB_REF}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Command: \\`bun run test:smoke\\`"
+            echo "- Coverage: file install + packed tarball install"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
