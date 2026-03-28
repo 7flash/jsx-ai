@@ -99,6 +99,17 @@ Notes:
 - Run `bun install` before `bun test` in a fresh checkout so runtime deps like `measure-fn` are available.
 - CI runs the same install + test flow in `.github/workflows/test.yml`.
 
+### Release smoke checks
+
+Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
+
+For a published npm install check, use `.github/workflows/registry-smoke.yml`:
+- Trigger it manually from **Actions → Registry smoke → Run workflow** when you want to verify a registry version on demand.
+- Use `jsx-ai@latest` to validate the current latest publish.
+- Use an exact version like `jsx-ai@0.1.5` right after a release if you want to confirm that specific npm version is visible.
+- The release-triggered workflow resolves the package spec automatically from the git tag (for example `v0.1.5` → `jsx-ai@0.1.5`).
+- If npm propagation is delayed, the workflow already retries automatically before failing.
+
 ## ✨ What You Get
 
 - **Multi-provider** → Gemini, OpenAI, Anthropic, DeepSeek — auto-detected from model name
