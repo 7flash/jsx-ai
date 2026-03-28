@@ -28,6 +28,37 @@ What it shows:
 - `render(prompt)` to inspect extracted model/tools/messages before the call
 - `callLLM(prompt)` to execute the prompt against the configured provider
 
+### `examples/render-prompt.tsx`
+
+A minimal prompt-inspection example.
+
+Run it with:
+
+```sh
+bun run examples/render-prompt.tsx
+```
+
+What it shows:
+- `render()` without a network call
+- extracted prompt JSON shape
+- model / strategy / tool declaration inspection
+
+### `examples/customizations.tsx`
+
+A runnable extension-point demo.
+
+Run it with:
+
+```sh
+bun run examples/customizations.tsx
+```
+
+What it shows:
+- registering a custom provider
+- registering a custom strategy
+- registering a telemetry hook
+- mocking `fetch` so the flow is demonstrable without a real LLM backend
+
 ## When to use examples vs guides
 
 - Use the example files when you want runnable code you can copy/adapt.
