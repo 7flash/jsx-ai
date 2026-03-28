@@ -67,7 +67,8 @@
 - [x] ~~**Consider path-filtering or job-scope tuning for docs smoke**~~ — ✅ DONE. Added a small change-detection job in `.github/workflows/test.yml` so docs smoke runs only for docs/package/export-related changes.
 - [x] ~~**Consider path-filtering for consumer smoke too**~~ — ✅ DONE. Extended the same change-detection job so consumer smoke runs only for packaging/export-relevant changes.
 - [x] ~~**Consider path-filtering for unit tests**~~ — ✅ DONE. Chose to keep unit tests always-on and documented that decision in the workflow plus contributor CI guide because unit regressions are not safely scope-reducible.
-- [ ] **Consider consolidating CI change detection docs** — The next useful pass is documenting the exact path-filter rules and rationale in one concise CI section so maintainers can update them confidently.
+- [x] ~~**Consider consolidating CI change detection docs**~~ — ✅ DONE. Added a dedicated CI change-detection section to `docs/contributor-ci.md` covering exact path filters, rationale, and update rules.
+- [ ] **Consider workflow comments for path filters** — The next useful pass is mirroring the CI doc rationale with brief inline comments near the workflow filter blocks for maintainers editing YAML directly.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

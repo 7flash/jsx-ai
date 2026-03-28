@@ -21,6 +21,61 @@ For contributors/maintainers:
 - Use the **Registry smoke** workflow / `bun run test:smoke:registry` when you need to validate an actually published npm package version.
 - Use CI/workflow dispatch when you want the same environment GitHub sees, especially for release validation and post-publish checks.
 
+## CI change-detection rules
+
+The main test workflow uses a small change-detection job to scope smoke coverage.
+
+### Unit tests
+
+- **Always run**
+- Rationale: unit coverage protects core correctness across runtime, extraction, strategies, providers, skills, and streaming.
+- Policy: do **not** path-filter this job unless the project intentionally accepts weaker regression protection.
+
+### Consumer smoke test
+
+Runs only when these paths change:
+
+- `package.json`
+- `src/**`
+- `tsconfig.json`
+- `README.md`
+
+Rationale:
+- validates packaging/export surface
+- validates consumer-facing entrypoints
+- README install guidance can affect how consumers use the package
+
+### Docs snippet smoke test
+
+Runs only when these paths change:
+
+- `README.md`
+- `docs/**`
+- `examples/**`
+- `package.json`
+- `src/**`
+- `tsconfig.json`
+
+Rationale:
+- verifies important quickstart/provider/API snippets in a clean consumer project
+- docs/examples changes can invalidate snippets directly
+- package/export/runtime changes can invalidate guide code indirectly
+
+### Registry smoke test
+
+- Separate workflow: `.github/workflows/registry-smoke.yml`
+- Not part of normal PR CI
+- Use for manual or release-triggered verification of an actually published npm package
+
+### When updating path filters
+
+If you change workflow scoping in `.github/workflows/test.yml`:
+
+1. update this document at the same time
+2. keep unit tests as the safety net unless there is a very strong reason not to
+3. prefer adding paths to smoke filters over removing them when unsure
+4. treat `package.json`, `src/**`, and docs/examples changes as high-risk for consumer/docs drift
+
 ## Benchmarks vs tests
 
 - Use tests (`bun test`, `bun run test:unit`, `bun run test:smoke`) for correctness, regressions, packaging safety, and release confidence.
