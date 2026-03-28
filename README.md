@@ -7,6 +7,10 @@
 
 JSX interface for structured LLM calls. Tools, messages, and prompts become composable components.
 
+Badge guide:
+- `test` → main CI workflow status for unit + consumer smoke coverage
+- `release-validation / registry_smoke` → manual/release registry-install validation workflow
+
 > Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml) and the [release checklist](#release-checklist).
 
 ```tsx
