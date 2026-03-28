@@ -134,6 +134,7 @@ Use `render()` instead of `callLLM()`.
 
 ## Where to go next
 
+- [Provider starter snippets](./provider-snippets.md)
 - [Examples guide](./examples.md)
 - [API reference](./api-reference.md)
 - [Configuration & compatibility guide](./configuration.md)

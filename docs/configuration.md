@@ -250,6 +250,8 @@ DASHSCOPE_API_KEY=...
 
 ## Related guides
 
+- [Provider starter snippets](./provider-snippets.md)
+- [Quickstart](./quickstart.md)
 - [API reference](./api-reference.md)
 - [Examples guide](./examples.md)
 - [Extension & customization guide](./extensibility.md)

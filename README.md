@@ -13,6 +13,7 @@ Badge guide:
 
 Start here:
 - [Quickstart](docs/quickstart.md)
+- [Provider starter snippets](docs/provider-snippets.md)
 - [What you get](#-what-you-get)
 - [Examples guide](docs/examples.md)
 - [API reference](docs/api-reference.md)
