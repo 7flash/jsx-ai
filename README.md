@@ -138,6 +138,10 @@ For contributors/maintainers:
 
 ## Maintainer release guide
 
+Workflow links:
+- [Main test workflow (`.github/workflows/test.yml`)](https://github.com/7flash/jsx-ai/actions/workflows/test.yml)
+- [Registry smoke workflow (`.github/workflows/registry-smoke.yml`)](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml)
+
 ### Release smoke checks
 
 Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
