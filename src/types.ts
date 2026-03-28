@@ -49,6 +49,7 @@ export interface PromptNode {
     type: "prompt"
     props: {
         model?: string
+        provider?: string
         temperature?: number
         maxTokens?: number
         strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
@@ -92,6 +93,7 @@ export interface ExtractedPrompt {
     messages: ExtractedMessage[]
     system?: string
     model?: string
+    provider?: string
     temperature?: number
     maxTokens?: number
     strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"

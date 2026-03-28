@@ -33,7 +33,7 @@ function walk(node: JsxAiNode, result: ExtractedPrompt): void {
             if (node.props.temperature != null) result.temperature = node.props.temperature
             if (node.props.maxTokens != null) result.maxTokens = node.props.maxTokens
             if (node.props.strategy) result.strategy = node.props.strategy
-            if (node.props.provider) (result as any).providerOverride = node.props.provider
+            if (node.props.provider) result.provider = node.props.provider
             walkChildren(node.props.children, result)
             break
 

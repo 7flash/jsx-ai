@@ -152,7 +152,7 @@ Start with the full [examples guide](docs/examples.md), or jump straight to a ru
 
 ## 🔌 Providers
 
-Auto-detected from model name. Override with `{ provider: "openai" }`.
+Auto-detected from model name. Override with `options.provider` or `<prompt provider="...">`.
 
 | Model | Provider | Auth | Env var |
 |-------|----------|------|---------|
@@ -201,10 +201,10 @@ Same JSX prompt, different tool encodings. Each strategy controls how tools appe
 | Strategy | Tools sent as | Response parsed from | Best for |
 |----------|---------------|---------------------|----------|
 | `native` | API `tools` field | Structured FC | Single tool calls, lowest tokens |
-| `nlt` | Text descriptions + native FC | Structured FC | Multi-turn agentic loops |
+| `nlt` | Natural-language YES/NO tool catalog | Text output | Multi-turn agentic loops |
 | `xml` | Text with XML schema | XML in text | Multi-tool batching |
 | `natural` | Text descriptions | Action blocks in text | Complex reasoning + tools |
-| `hybrid` | API `tools` + text schema | Either | Balanced |
+| `hybrid` | API `tools` + behavioral hints | Structured FC | Balanced |
 
 ```tsx
 // Strategy via options
@@ -235,7 +235,7 @@ registerStrategy("my-strategy", { prepare, parseResponse })
 | `<tool>` | `name`, `description` | Tool/function declaration |
 | `<param>` | `name`, `type`, `required`, `enum` | Tool parameter (children = description) |
 | `<message>` | `role` (`user` \| `assistant`) | Conversation message |
-| `<prompt>` | `model`, `temperature`, `maxTokens`, `strategy` | Optional config wrapper |
+| `<prompt>` | `model`, `provider`, `temperature`, `maxTokens`, `strategy` | Optional config wrapper |
 
 ## 🧠 Skills
 
@@ -313,7 +313,7 @@ extracted.system    // "You are helpful"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `model` | `string` | `"gemini-2.5-flash"` | Model name (also determines provider) |
-| `provider` | `"gemini" \| "openai" \| "anthropic"` | auto-detected | Force a specific provider |
+| `provider` | `string` | auto-detected | Force a specific provider (built-ins: `gemini`, `openai`, `anthropic`) |
 | `strategy` | `"native" \| "nlt" \| "xml" \| "natural" \| "hybrid"` | `"auto"` | Tool encoding strategy |
 | `apiKey` | `string` | from env | Override API key |
 | `temperature` | `number` | `0.1` | Sampling temperature |

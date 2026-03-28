@@ -32,6 +32,7 @@ Use when:
 
 Important notes:
 - provider is auto-detected from `model` unless overridden
+- provider can be overridden via `options.provider` or `<prompt provider="...">`
 - strategy defaults to `auto`
 - request telemetry hooks fire for each call
 
@@ -106,7 +107,7 @@ Shared options for `callLLM()`.
 | Field | Type | Notes |
 |---|---|---|
 | `apiKey` | `string` | Overrides env-based key resolution |
-| `provider` | `"gemini" \| "openai"` | Force provider instead of model auto-detect |
+| `provider` | `string` | Force provider instead of model auto-detect; built-ins are `gemini`, `openai`, and `anthropic`, and custom registered providers are also allowed |
 | `strategy` | `"native" \| "xml" \| "natural" \| "nlt" \| "hybrid" \| "auto"` | Override strategy |
 | `model` | `string` | Override prompt model |
 | `temperature` | `number` | Override sampling temperature |
@@ -128,6 +129,26 @@ Normalized response returned by `callLLM()`.
 
 ```ts
 { name: string; args: Record<string, any> }
+```
+
+### `<prompt ...>`
+
+Optional config wrapper for prompt-level settings.
+
+Common props:
+
+- `model?: string`
+- `provider?: string`
+- `temperature?: number`
+- `maxTokens?: number`
+- `strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"`
+
+Example:
+
+```tsx
+<prompt model="custom-openai-route" provider="openai" strategy="xml">
+  <message role="user">Hello</message>
+</prompt>
 ```
 
 ## Skills API

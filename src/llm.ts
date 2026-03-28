@@ -27,8 +27,8 @@ export type { LLMResponse }
 export interface CallOptions {
     /** API key (defaults to env vars based on provider) */
     apiKey?: string
-    /** Provider to use: "gemini" | "openai". Default: auto-detected from model name */
-    provider?: "gemini" | "openai"
+    /** Provider to use. Default: auto-detected from model name. Built-ins: "gemini" | "openai" | "anthropic" */
+    provider?: string
     /** Override the strategy ("native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"). Default: "auto" */
     strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
     /** Override the model */
@@ -227,7 +227,7 @@ export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<L
     const strategy = resolveStrategy(prompt, options?.strategy)
     const model = prompt.model || "gemini-2.5-flash"
     // Use provider from options, or from prompt JSX prop, or detect from model
-    const providerOverride = options?.provider || (prompt as any).providerOverride
+    const providerOverride = options?.provider || prompt.provider
     const provider = resolveProvider(model, providerOverride)
     const apiKey = resolveApiKey(provider, options)
 

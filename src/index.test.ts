@@ -206,8 +206,8 @@ describe("extract", () => {
 
     test("provider override is extracted from prompt", () => {
         const tree = h("prompt", { provider: "openai", children: [] })
-        const result = extract(tree) as any
-        expect(result.providerOverride).toBe("openai")
+        const result = extract(tree)
+        expect(result.provider).toBe("openai")
     })
 })
 

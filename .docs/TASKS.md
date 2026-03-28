@@ -59,7 +59,8 @@
 - [x] ~~**Add docs cross-links between guides**~~ — ✅ DONE. Added or expanded “Related guides” sections across the main docs so readers can move laterally without returning to the docs index.
 - [x] ~~**Add top-level quickstart guide**~~ — ✅ DONE. Added `docs/quickstart.md` and linked it from the README plus docs index for a minimal install → config → first `callLLM()` path.
 - [x] ~~**Add copy-paste code snippets for provider choices**~~ — ✅ DONE. Added `docs/provider-snippets.md` with minimal Gemini, OpenAI-compatible, Anthropic, text-only, and streaming starter snippets.
-- [ ] **Add README/API consistency pass** — The next useful docs pass is reconciling top-level README tables/snippets with newer guide coverage so defaults, provider notes, and quick links stay perfectly aligned.
+- [x] ~~**Add README/API consistency pass**~~ — ✅ DONE. Reconciled README/docs with the typed API by documenting `<prompt provider="...">`, broadening provider override docs, correcting strategy descriptions, and aligning extraction/tests around the public `provider` field.
+- [ ] **Add export surface smoke coverage for docs examples** — The next useful pass is lightweight coverage that the documented JSX props and exported entrypoints used in guides remain valid for consumers.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -68,7 +69,7 @@
 - Current local suite status: 50 passing tests across unit + smoke coverage.
 - Bench command: `bun run bench/strategies.ts`
 - Main test file currently discovered: `src/index.test.ts`
-- LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`
+- LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`; provider overrides are supported via both `CallOptions.provider` and `<prompt provider="...">`.
 - `src/llm.ts` now treats `measure-fn` as optional telemetry by using a dynamic import fallback around fetch measurement.
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
