@@ -17,6 +17,7 @@ Quick links:
 - [Architecture guide](docs/architecture.md)
 - [Examples guide](docs/examples.md)
 - [API reference](docs/api-reference.md)
+- [Configuration & compatibility guide](docs/configuration.md)
 - [Extension & customization guide](docs/extensibility.md)
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)
