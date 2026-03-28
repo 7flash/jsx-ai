@@ -1,6 +1,9 @@
 name: Registry smoke
 
 on:
+  # Registry smoke validates an actually published npm artifact, so it is kept
+  # out of normal PR CI. Trigger it manually on demand or automatically from a
+  # published GitHub Release when a real version should exist in the registry.
   workflow_dispatch:
     inputs:
       package_spec:
@@ -41,6 +44,8 @@ jobs:
 
       - name: Set package spec from release tag
         if: github.event_name == 'release'
+        # Release tags use the repo convention vX.Y.Z, which maps directly to
+        # the published npm target jsx-ai@X.Y.Z for registry verification.
         run: |
           echo "REGISTRY_SMOKE_SPEC=jsx-ai@${GITHUB_EVENT_RELEASE_TAG_NAME#v}" >> "$GITHUB_ENV"
           echo "Resolved release smoke target: jsx-ai@${GITHUB_EVENT_RELEASE_TAG_NAME#v}"

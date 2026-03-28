@@ -69,7 +69,8 @@
 - [x] ~~**Consider path-filtering for unit tests**~~ — ✅ DONE. Chose to keep unit tests always-on and documented that decision in the workflow plus contributor CI guide because unit regressions are not safely scope-reducible.
 - [x] ~~**Consider consolidating CI change detection docs**~~ — ✅ DONE. Added a dedicated CI change-detection section to `docs/contributor-ci.md` covering exact path filters, rationale, and update rules.
 - [x] ~~**Consider workflow comments for path filters**~~ — ✅ DONE. Added brief inline comments near the workflow filter blocks so YAML editors can see the consumer/docs smoke scope rationale immediately.
-- [ ] **Consider workflow comments for registry smoke rationale** — The next useful pass is mirroring the manual/release-only reasoning inline in `.github/workflows/registry-smoke.yml` too.
+- [x] ~~**Consider workflow comments for registry smoke rationale**~~ — ✅ DONE. Added inline comments in `.github/workflows/registry-smoke.yml` explaining why the workflow is manual/release-only and how release tags resolve to npm package specs.
+- [ ] **Consider CI docs cross-link from maintainer release guide** — The next useful docs pass is linking the CI change-detection/contributor guide more directly from the release guide’s workflow sections.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
