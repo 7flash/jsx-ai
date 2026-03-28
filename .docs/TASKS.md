@@ -70,7 +70,8 @@
 - [x] ~~**Consider consolidating CI change detection docs**~~ — ✅ DONE. Added a dedicated CI change-detection section to `docs/contributor-ci.md` covering exact path filters, rationale, and update rules.
 - [x] ~~**Consider workflow comments for path filters**~~ — ✅ DONE. Added brief inline comments near the workflow filter blocks so YAML editors can see the consumer/docs smoke scope rationale immediately.
 - [x] ~~**Consider workflow comments for registry smoke rationale**~~ — ✅ DONE. Added inline comments in `.github/workflows/registry-smoke.yml` explaining why the workflow is manual/release-only and how release tags resolve to npm package specs.
-- [ ] **Consider CI docs cross-link from maintainer release guide** — The next useful docs pass is linking the CI change-detection/contributor guide more directly from the release guide’s workflow sections.
+- [x] ~~**Consider CI docs cross-link from maintainer release guide**~~ — ✅ DONE. Added direct contributor-CI/doc-index pointers inside `docs/maintainer-release.md` so workflow sections link back to CI job behavior docs.
+- [ ] **Consider top-level docs index link from README release note** — The next useful docs pass is checking whether the small maintainer/footer pointers in the README should reference the richer docs index more explicitly.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun

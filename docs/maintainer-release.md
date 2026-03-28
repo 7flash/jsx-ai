@@ -6,7 +6,7 @@ Workflow links:
 
 ## Release smoke checks
 
-Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests.
+Normal CI covers unit tests plus local-consumer and packed-artifact smoke tests. For the exact CI job map and path-filter behavior, see the [Contributor CI & test guide](./contributor-ci.md).
 
 For a published npm install check, use `.github/workflows/registry-smoke.yml`:
 - Trigger it manually from **Actions → Registry smoke → Run workflow** when you want to verify a registry version on demand.
@@ -24,6 +24,8 @@ Minimal merge-to-publish path:
 2. `bun test`
 3. publish the package
 4. confirm the release-triggered or manually dispatched **Registry smoke** workflow passes for the published version
+
+If you want the exact mapping between local commands and CI jobs before publishing, use the [Contributor CI & test guide](./contributor-ci.md).
 
 ## Release checklist
 
@@ -64,3 +66,4 @@ After registry smoke passes, quickly confirm:
 - [Troubleshooting guide](./troubleshooting.md)
 - [Configuration & compatibility guide](./configuration.md)
 - [Examples guide](./examples.md)
+- [Docs index](./README.md)
