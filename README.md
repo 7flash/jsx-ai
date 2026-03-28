@@ -30,7 +30,7 @@ Contribute and maintain:
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)
 
-> Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml), the [docs index](docs/README.md), and the [maintainer release guide](docs/maintainer-release.md).
+> Release validation: start from the [docs index](docs/README.md), then use the [maintainer release guide](docs/maintainer-release.md) and the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml) for published-package verification.
 
 ```tsx
 import { callLLM } from "jsx-ai"
@@ -357,7 +357,7 @@ Options for both `callText` and `streamLLM`:
 | `maxTokens` | `number` | `8000` | Max output tokens |
 | `apiKey` | `string` | from env | Override API key |
 
-> Maintainers: release/publish notes live in [docs/maintainer-release.md](docs/maintainer-release.md).
+> Maintainers: start from the [docs index](docs/README.md) for the full guide map, then use the [maintainer release guide](docs/maintainer-release.md) for publish/registry validation steps.
 
 ## License
 
