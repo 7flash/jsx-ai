@@ -199,7 +199,8 @@ type MeasureModuleLoader = () => Promise<MeasureModule>
 const defaultMeasureModuleLoader: MeasureModuleLoader = () => import("measure-fn")
 let measureModuleLoader: MeasureModuleLoader = defaultMeasureModuleLoader
 
-export function __setMeasureModuleLoaderForTests(loader?: MeasureModuleLoader): void {
+/** @internal Test-only seam for simulating missing optional telemetry modules. */
+export function __setInternalMeasureModuleLoaderForTests(loader?: MeasureModuleLoader): void {
     measureModuleLoader = loader || defaultMeasureModuleLoader
 }
 

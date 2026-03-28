@@ -724,14 +724,14 @@ describe("resolveSkills", () => {
 //   STREAM LLM TESTS
 // ═══════════════════════════════════════════════════════════════════
 
-import { streamLLM, callLLM, __setMeasureModuleLoaderForTests } from "./llm"
+import { streamLLM, callLLM, __setInternalMeasureModuleLoaderForTests } from "./llm"
 
 describe("callLLM", () => {
     test("falls back when optional telemetry module is unavailable", async () => {
         const originalFetch = globalThis.fetch
         const originalApiKey = process.env.OPENAI_API_KEY
 
-        __setMeasureModuleLoaderForTests(async () => {
+        __setInternalMeasureModuleLoaderForTests(async () => {
             throw new Error("measure-fn not installed")
         })
 
@@ -757,7 +757,7 @@ describe("callLLM", () => {
 
             expect(result.text).toBe("ok")
         } finally {
-            __setMeasureModuleLoaderForTests()
+            __setInternalMeasureModuleLoaderForTests()
             globalThis.fetch = originalFetch
             if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY
             else process.env.OPENAI_API_KEY = originalApiKey
