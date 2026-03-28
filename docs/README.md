@@ -2,12 +2,20 @@
 
 ## Start here
 
-- [Examples guide](./examples.md) — runnable example entrypoints and what each one demonstrates.
-- [API reference](./api-reference.md) — concise reference for the main exports, options, skills API, hooks, strategies, providers, and common types.
-- [Configuration & compatibility guide](./configuration.md) — env vars, `.config.toml`, provider detection, explorer hook, and base URL overrides.
-- [Troubleshooting guide](./troubleshooting.md) — common setup, provider, streaming, skills, and CI/smoke test failures with quick fixes.
+If you're new to the library, use this order:
+
+1. [Examples guide](./examples.md) — runnable example entrypoints and what each one demonstrates.
+2. [API reference](./api-reference.md) — concise reference for the main exports, options, skills API, hooks, strategies, providers, and common types.
+3. [Configuration & compatibility guide](./configuration.md) — env vars, `.config.toml`, provider detection, explorer hook, and base URL overrides.
+4. [Troubleshooting guide](./troubleshooting.md) — common setup, provider, streaming, skills, and CI/smoke test failures with quick fixes.
+
+## Build and extend
+
 - [Architecture guide](./architecture.md) — package structure, call flow, strategy/provider separation, and where core responsibilities live.
 - [Extension & customization guide](./extensibility.md) — custom providers, strategies, hooks, and how they fit into the request pipeline.
+
+## Contribute and maintain
+
 - [Contributor CI & test guide](./contributor-ci.md) — CI workflow ownership, when to use each test path, and benchmark-vs-test guidance.
 - [Maintainer release guide](./maintainer-release.md) — release validation, registry smoke workflow usage, version alignment, and post-release checks.
 

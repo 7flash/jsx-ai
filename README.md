@@ -11,18 +11,22 @@ Badge guide:
 - `test` → main CI workflow status for unit + consumer smoke coverage
 - `release-validation / registry_smoke` → manual/release registry-install validation workflow
 
-Quick links:
-- [Development](#development)
-- [Docs index](docs/README.md)
-- [Architecture guide](docs/architecture.md)
+Start here:
+- [What you get](#-what-you-get)
 - [Examples guide](docs/examples.md)
 - [API reference](docs/api-reference.md)
 - [Configuration & compatibility guide](docs/configuration.md)
 - [Troubleshooting guide](docs/troubleshooting.md)
+
+Build and extend:
+- [Architecture guide](docs/architecture.md)
 - [Extension & customization guide](docs/extensibility.md)
+- [Docs index](docs/README.md)
+
+Contribute and maintain:
+- [Development](#development)
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)
-- [What you get](#-what-you-get)
 
 > Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml), the [docs index](docs/README.md), and the [maintainer release guide](docs/maintainer-release.md).
 

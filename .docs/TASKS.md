@@ -55,7 +55,8 @@
 - [x] ~~**Add API reference docs**~~ — ✅ DONE. Added `docs/api-reference.md` and linked it from the README plus docs index for core exports, skills, hooks, strategies, providers, and types.
 - [x] ~~**Add compatibility/config docs**~~ — ✅ DONE. Added `docs/configuration.md` covering env vars, provider detection, `.config.toml`, explorer telemetry, and OpenAI-compatible base URL overrides.
 - [x] ~~**Add troubleshooting guide**~~ — ✅ DONE. Added `docs/troubleshooting.md` and linked it from the README/docs index for API key, provider routing, skills, streaming, and smoke-test debugging.
-- [ ] **Add docs landing-page polish** — The next useful docs task is tightening README/docs index section ordering and “start here” flow now that the guide set is broad.
+- [x] ~~**Add docs landing-page polish**~~ — ✅ DONE. Reworked `README.md` and `docs/README.md` into clearer “start here / build and extend / contribute and maintain” entry flows.
+- [ ] **Add docs cross-links between guides** — The next useful docs pass is tightening related-guide links inside each guide so readers can navigate laterally without returning to the index.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
