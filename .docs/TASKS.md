@@ -42,7 +42,8 @@
 - [x] ~~**Consider splitting maintainer guidance into separate docs**~~ — ✅ DONE. Moved release operations into `docs/maintainer-release.md` and turned README into a lighter pointer to that guide.
 - [x] ~~**Add dedicated docs index/reference links**~~ — ✅ DONE. Added `docs/README.md` and linked it from the top of the main README for discoverability.
 - [x] ~~**Expand docs index as more guides appear**~~ — ✅ DONE. Added `docs/contributor-ci.md` and updated the docs index plus README quick links.
-- [ ] **Add architecture/dev internals guide** — The docs index now has contributor + maintainer docs; next useful doc is internal package architecture.
+- [x] ~~**Add architecture/dev internals guide**~~ — ✅ DONE. Added `docs/architecture.md` covering package structure, call flow, and core responsibility boundaries.
+- [ ] **Document extension/customization architecture** — The next useful internal doc is how custom providers, hooks, and strategies extend the package.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -56,7 +57,7 @@
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
 - Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware summary with run links.
-- Contributor/testing guidance now lives in `docs/contributor-ci.md`; maintainer/release operations live in `docs/maintainer-release.md`; `docs/README.md` acts as a lightweight docs index and README keeps top-level quick links for discoverability.
+- Contributor/testing guidance now lives in `docs/contributor-ci.md`; maintainer/release operations live in `docs/maintainer-release.md`; architecture details live in `docs/architecture.md`; `docs/README.md` acts as a lightweight docs index and README keeps top-level quick links for discoverability.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
 - Registry smoke coverage lives in `src/registry-smoke.test.ts`, uses `REGISTRY_SMOKE_SPEC`, and now performs an npm metadata preflight so missing versions fail with actionable diagnostics.
 

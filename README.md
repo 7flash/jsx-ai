@@ -14,6 +14,7 @@ Badge guide:
 Quick links:
 - [Development](#development)
 - [Docs index](docs/README.md)
+- [Architecture guide](docs/architecture.md)
 - [Contributor CI & test guide](docs/contributor-ci.md)
 - [Maintainer release guide](docs/maintainer-release.md)
 - [What you get](#-what-you-get)
