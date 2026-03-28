@@ -13,10 +13,11 @@ Badge guide:
 
 Quick links:
 - [Development](#development)
+- [Docs index](docs/README.md)
 - [Maintainer release guide](docs/maintainer-release.md)
 - [What you get](#-what-you-get)
 
-> Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml) and the [maintainer release guide](docs/maintainer-release.md).
+> Release validation: see the [Registry smoke workflow](https://github.com/7flash/jsx-ai/actions/workflows/registry-smoke.yml), the [docs index](docs/README.md), and the [maintainer release guide](docs/maintainer-release.md).
 
 ```tsx
 import { callLLM } from "jsx-ai"

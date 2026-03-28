@@ -40,7 +40,8 @@
 - [x] ~~**Tighten README section ordering**~~ — ✅ DONE. Moved the maintainer release guide near the end of the README so end-user usage and API docs stay prominent.
 - [x] ~~**Add end-of-README maintainer note near License**~~ — ✅ DONE. Added a small footer note pointing maintainers back to the release guide.
 - [x] ~~**Consider splitting maintainer guidance into separate docs**~~ — ✅ DONE. Moved release operations into `docs/maintainer-release.md` and turned README into a lighter pointer to that guide.
-- [ ] **Add dedicated docs index/reference links** — README now links into docs; consider a tiny docs index or docs section for discoverability.
+- [x] ~~**Add dedicated docs index/reference links**~~ — ✅ DONE. Added `docs/README.md` and linked it from the top of the main README for discoverability.
+- [ ] **Expand docs index as more guides appear** — Keep `docs/README.md` updated as contributor or architecture guides are added.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -54,7 +55,7 @@
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
 - Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware summary with run links.
-- Maintainer/release operations now live in `docs/maintainer-release.md`, while README keeps top-level quick links and lighter pointers for discoverability.
+- Maintainer/release operations now live in `docs/maintainer-release.md`, with `docs/README.md` acting as a lightweight docs index and README keeping top-level quick links for discoverability.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
 - Registry smoke coverage lives in `src/registry-smoke.test.ts`, uses `REGISTRY_SMOKE_SPEC`, and now performs an npm metadata preflight so missing versions fail with actionable diagnostics.
 
