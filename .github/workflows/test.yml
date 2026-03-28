@@ -13,19 +13,25 @@ on:
 
 jobs:
   changes:
-    name: Detect docs smoke scope
+    name: Detect smoke scope
     runs-on: ubuntu-latest
     outputs:
+      consumer_relevant: ${{ steps.filter.outputs.consumer_relevant }}
       docs_relevant: ${{ steps.filter.outputs.docs_relevant }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Detect docs-relevant changes
+      - name: Detect smoke-relevant changes
         id: filter
         uses: dorny/paths-filter@v3
         with:
           filters: |
+            consumer_relevant:
+              - 'package.json'
+              - 'src/**'
+              - 'tsconfig.json'
+              - 'README.md'
             docs_relevant:
               - 'README.md'
               - 'docs/**'
@@ -77,6 +83,8 @@ jobs:
   consumer-smoke:
     name: Consumer smoke test
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.consumer_relevant == 'true'
     steps:
       - name: Capture start time
         run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"

@@ -5,7 +5,7 @@
 For contributors/maintainers:
 - `.github/workflows/test.yml`
   - **Unit tests** job → `bun run test:unit`
-  - **Consumer smoke test** job → `bun run test:smoke`
+  - **Consumer smoke test** job → `bun run test:smoke` (runs only when packaging/export-related files change)
   - **Docs snippet smoke test** job → `bun run test:docs` (runs only when docs/package/export-related files change)
 - `.github/workflows/registry-smoke.yml`
   - **Registry install smoke test** → `bun run test:smoke:registry`
