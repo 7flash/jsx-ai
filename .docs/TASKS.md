@@ -22,7 +22,8 @@
 - [x] ~~**Add retry/backoff to release registry smoke**~~ — ✅ DONE. Added configurable retry/backoff to registry availability checks and enabled a 6-attempt / 10s-delay policy in the release workflow.
 - [x] ~~**Add workflow summary output for smoke jobs**~~ — ✅ DONE. Added GitHub Actions step summaries for unit, consumer smoke, and registry smoke jobs with command/result/target details.
 - [x] ~~**Add duration metrics to workflow summaries**~~ — ✅ DONE. Added per-job elapsed duration output to unit, consumer smoke, and registry smoke summaries.
-- [ ] **Add artifact/log links to workflow summaries** — Surface the most useful follow-up locations when a smoke job fails.
+- [x] ~~**Add artifact/log links to workflow summaries**~~ — ✅ DONE. Added direct workflow run, attempt, and Actions overview links to CI and registry smoke summaries.
+- [ ] **Add release-doc note for manual registry smoke runs** — Document when to trigger `registry-smoke.yml` manually and which package spec to use.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
@@ -34,8 +35,8 @@
 - LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`
 - `src/llm.ts` now treats `measure-fn` as optional telemetry by using a dynamic import fallback around fetch measurement.
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
-- CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations.
-- Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware job summary.
+- CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags, and writes per-job summaries with durations and run links.
+- Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases, with retry/backoff for npm propagation delays and a duration-aware summary with run links.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
 - Registry smoke coverage lives in `src/registry-smoke.test.ts`, uses `REGISTRY_SMOKE_SPEC`, and now performs an npm metadata preflight so missing versions fail with actionable diagnostics.
 

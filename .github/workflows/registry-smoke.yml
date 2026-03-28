@@ -67,6 +67,9 @@ jobs:
             echo "- Command: \\`bun run test:smoke:registry\\`"
             echo "- Duration: ${DURATION_SECONDS}s"
             echo "- Result: ${{ job.status }}"
+            echo "- Run logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- Workflow run attempt: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+            echo "- Actions overview: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Registry smoke failure hint
