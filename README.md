@@ -110,7 +110,9 @@ For a published npm install check, use `.github/workflows/registry-smoke.yml`:
 - Trigger it manually from **Actions → Registry smoke → Run workflow** when you want to verify a registry version on demand.
 - Use `jsx-ai@latest` to validate the current latest publish.
 - Use an exact version like `jsx-ai@0.1.5` right after a release if you want to confirm that specific npm version is visible.
-- The release-triggered workflow resolves the package spec automatically from the git tag (for example `v0.1.5` → `jsx-ai@0.1.5`).
+- Automatic trigger expectation: the workflow runs on **GitHub Release → published** events, not on every tag push by itself.
+- In the release path, the workflow resolves the package spec automatically from the release tag (for example `v0.1.5` → `jsx-ai@0.1.5`).
+- If you only pushed a tag but did not publish a GitHub Release, run the workflow manually instead.
 - If npm propagation is delayed, the workflow already retries automatically before failing.
 
 ### Release checklist
