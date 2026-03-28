@@ -123,6 +123,21 @@ What it shows:
 - explicit `provider="openai"` override on a prompt
 - mocked `fetch` responses for each provider path
 
+### `examples/strategies.tsx`
+
+A runnable strategy-specific behavior demo.
+
+Run it with:
+
+```sh
+bun run examples/strategies.tsx
+```
+
+What it shows:
+- how `native`, `xml`, `nlt`, and `hybrid` prepare the same prompt differently
+- how each strategy parses representative provider responses
+- the difference between native tool calls and text-encoded tool calls
+
 ## When to use examples vs guides
 
 - Use the example files when you want runnable code you can copy/adapt.
