@@ -1,6 +1,6 @@
-import { describe, test } from "bun:test"
+import { describe, test, expect } from "bun:test"
 import { writeFileSync, mkdtempSync, rmSync } from "fs"
-import { join } from "path"
+import { join, basename } from "path"
 import { tmpdir } from "os"
 
 const repoRoot = join(import.meta.dir, "..").replace(/\\/g, "/")
@@ -120,27 +120,52 @@ function expectSuccess(result: ReturnType<typeof Bun.spawnSync>, label: string) 
     }
 }
 
+function runDocsSnippetInstall(dependencySpecifier: string) {
+    const dir = mkdtempSync(join(tmpdir(), "jsx-ai-docs-snippets-"))
+
+    try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({
+            name: "jsx-ai-docs-snippets-smoke",
+            private: true,
+            type: "module",
+            dependencies: {
+                "jsx-ai": dependencySpecifier,
+            },
+        }, null, 2))
+
+        writeFileSync(join(dir, "snippets.tsx"), docsSnippetSource)
+
+        expectSuccess(run(["bun", "install"], dir), "bun install")
+        const smokeRun = run(["bun", "run", "--install=fallback", "snippets.tsx"], dir)
+        expectSuccess(smokeRun, "bun run snippets.tsx")
+        expect(smokeRun.stdout.toString()).toContain("ok")
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+}
+
 describe("docs snippet smoke", () => {
-    test("guide snippets stay runnable in a clean consumer project", { timeout: 30000 }, () => {
-        const dir = mkdtempSync(join(tmpdir(), "jsx-ai-docs-snippets-"))
+    test("guide snippets stay runnable in a clean consumer project from file install", { timeout: 30000 }, () => {
+        runDocsSnippetInstall(`file:${repoRoot}`)
+    })
+
+    test("guide snippets stay runnable from the packed publish artifact", { timeout: 30000 }, () => {
+        const packDir = mkdtempSync(join(tmpdir(), "jsx-ai-docs-pack-"))
 
         try {
-            writeFileSync(join(dir, "package.json"), JSON.stringify({
-                name: "jsx-ai-docs-snippets-smoke",
-                private: true,
-                type: "module",
-                dependencies: {
-                    "jsx-ai": `file:${repoRoot}`,
-                },
-            }, null, 2))
+            const pack = run(["bun", "pm", "pack", "--quiet", "--destination", packDir], repoRoot)
+            expectSuccess(pack, "bun pm pack")
 
-            writeFileSync(join(dir, "snippets.tsx"), docsSnippetSource)
+            const tarball = pack.stdout.toString().trim().split(/\r?\n/).filter(Boolean).pop()
+            expect(tarball).toBeDefined()
 
-            expectSuccess(run(["bun", "install"], dir), "bun install")
-            const smokeRun = run(["bun", "run", "--install=fallback", "snippets.tsx"], dir)
-            expectSuccess(smokeRun, "bun run snippets.tsx")
+            const tarballPath = tarball!.includes("/") || tarball!.includes("\\")
+                ? tarball!
+                : join(packDir, basename(tarball!)).replace(/\\/g, "/")
+
+            runDocsSnippetInstall(`file:${tarballPath.replace(/\\/g, "/")}`)
         } finally {
-            rmSync(dir, { recursive: true, force: true })
+            rmSync(packDir, { recursive: true, force: true })
         }
     })
 })

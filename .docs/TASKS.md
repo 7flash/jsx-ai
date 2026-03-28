@@ -62,13 +62,14 @@
 - [x] ~~**Add README/API consistency pass**~~ — ✅ DONE. Reconciled README/docs with the typed API by documenting `<prompt provider="...">`, broadening provider override docs, correcting strategy descriptions, and aligning extraction/tests around the public `provider` field.
 - [x] ~~**Add export surface smoke coverage for docs examples**~~ — ✅ DONE. Expanded `src/consumer-smoke.test.ts` to validate the documented consumer-facing exports and JSX prompt props used across the guides.
 - [x] ~~**Add guide-snippet verification strategy**~~ — ✅ DONE. Added `src/docs-snippets.test.ts` plus `bun run test:docs` to keep important quickstart/provider/API snippets runnable in a clean consumer project.
-- [ ] **Add packed-tarball docs-snippet coverage** — The next useful pass is deciding whether the docs-snippet smoke path should also validate the packed publish artifact, not just `file:` installs.
+- [x] ~~**Add packed-tarball docs-snippet coverage**~~ — ✅ DONE. Extended `src/docs-snippets.test.ts` so the same guide snippets are verified against both `file:` installs and the packed publish artifact.
+- [ ] **Add docs verification to CI** — The next useful pass is deciding whether `test:docs` should run in the main workflow, a separate job, or only for docs/package changes.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
 - Test command: `bun test`
 - Focused scripts: `bun run test:unit`, `bun run test:smoke`, `bun run test:docs`, `bun run test:smoke:registry`
-- Current local suite status: 51 passing tests across unit + smoke coverage.
+- Current local suite status: 52 passing tests across unit + smoke coverage.
 - Bench command: `bun run bench/strategies.ts`
 - Main test file currently discovered: `src/index.test.ts`
 - LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`; provider overrides are supported via both `CallOptions.provider` and `<prompt provider="...">`.
