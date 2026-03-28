@@ -1,0 +1,39 @@
+name: Registry smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_spec:
+        description: 'Registry package spec to validate (for example: jsx-ai@latest or jsx-ai@0.1.5)'
+        required: true
+        default: 'jsx-ai@latest'
+  release:
+    types:
+      - published
+
+jobs:
+  registry-smoke:
+    name: Registry install smoke test
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_SMOKE_SPEC: ${{ github.event_name == 'workflow_dispatch' && inputs.package_spec || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Set package spec from release tag
+        if: github.event_name == 'release'
+        run: echo "REGISTRY_SMOKE_SPEC=jsx-ai@${GITHUB_EVENT_RELEASE_TAG_NAME#v}" >> "$GITHUB_ENV"
+        env:
+          GITHUB_EVENT_RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+
+      - name: Run registry smoke test
+        run: bun run test:smoke:registry

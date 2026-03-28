@@ -17,20 +17,23 @@
 - [x] ~~**Add smoke tests for package consumer import paths**~~ — ✅ DONE. Verified published-style consumer imports in a clean temp project using Bun.
 - [x] ~~**Split smoke tests into a dedicated test file/script**~~ — ✅ DONE. Moved consumer smoke coverage into `src/consumer-smoke.test.ts` and added `test:smoke`.
 - [x] ~~**Add publish-mode smoke coverage**~~ — ✅ DONE. Added packed-tarball smoke coverage using `bun pm pack` to verify the publish artifact behaves like the local install.
-- [ ] **Add registry-install smoke coverage** — Optionally validate against an actual published npm version/tag in release workflows.
+- [x] ~~**Add registry-install smoke coverage**~~ — ✅ DONE. Added `src/registry-smoke.test.ts`, `test:smoke:registry`, and a dedicated `registry-smoke.yml` workflow for manual or release-triggered registry validation.
+- [ ] **Harden release smoke workflow error reporting** — Surface clearer diagnostics if the registry version is unavailable or publication is delayed.
 
 ## 📝 Architecture Notes
 - Package manager/runtime: Bun
 - Test command: `bun test`
-- Focused scripts: `bun run test:unit`, `bun run test:smoke`
-- Current local suite status: 49 passing tests across unit + consumer smoke coverage.
+- Focused scripts: `bun run test:unit`, `bun run test:smoke`, `bun run test:smoke:registry`
+- Current local suite status: 50 passing tests across unit + smoke coverage.
 - Bench command: `bun run bench/strategies.ts`
 - Main test file currently discovered: `src/index.test.ts`
 - LLM entrypoints exported from `src/index.ts`, implementation in `src/llm.ts`
 - `src/llm.ts` now treats `measure-fn` as optional telemetry by using a dynamic import fallback around fetch measurement.
 - `src/llm.ts` includes an explicitly internal test-only telemetry loader override used by `src/index.test.ts` to simulate missing optional instrumentation.
 - CI workflow: `.github/workflows/test.yml` runs separate Unit and Consumer smoke jobs on push, pull_request, `release/**` branches, and `v*` tags.
+- Registry workflow: `.github/workflows/registry-smoke.yml` runs registry-install validation on manual dispatch or published releases.
 - Consumer smoke coverage lives in `src/consumer-smoke.test.ts` and verifies both `file:` installs and packed publish artifacts via `bun pm pack` + temp-project `bun run --install=fallback`.
+- Registry smoke coverage lives in `src/registry-smoke.test.ts` and uses `REGISTRY_SMOKE_SPEC` to validate actual registry installs without blocking normal CI.
 
 ## ⚠️ Security Reminders
 - Do not commit API keys or `.config.toml` secrets.
