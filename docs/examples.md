@@ -59,6 +59,23 @@ What it shows:
 - registering a telemetry hook
 - mocking `fetch` so the flow is demonstrable without a real LLM backend
 
+### `examples/skills.tsx`
+
+A runnable skill discovery/resolution demo.
+
+Run it with:
+
+```sh
+bun run examples/skills.tsx
+```
+
+What it shows:
+- skill discovery with `<Skill path="..." />`
+- lazy activation via `<UseSkillTool />`
+- simulating `use_skill({ skill_name: ... })`
+- resolving full skill content with `resolveSkills()` + `<Skill resolve />`
+- sample skill markdown files under `examples/skills/`
+
 ## When to use examples vs guides
 
 - Use the example files when you want runnable code you can copy/adapt.
