@@ -198,6 +198,49 @@ describe("extract", () => {
         expect(result.messages.length).toBe(1)
     })
 
+    test("extracts text from nested fragments inside messages and system", () => {
+        const tree = h("prompt", {
+            children: [
+                h("system", {
+                    children: [
+                        { type: "text", value: "You are " },
+                        Fragment({ children: [{ type: "text", value: "helpful" }] }),
+                    ],
+                }),
+                h("message", {
+                    role: "user",
+                    children: [
+                        { type: "text", value: "Hello" },
+                        Fragment({ children: [{ type: "text", value: " world" }] }),
+                        { type: "text", value: "!" },
+                    ],
+                }),
+            ],
+        })
+
+        const result = extract(tree)
+        expect(result.system).toBe("You are helpful")
+        expect(result.messages[0].content).toBe("Hello world!")
+    })
+
+    test("extracts params nested inside fragments", () => {
+        const tree = h("tool", {
+            name: "edit_file",
+            description: "Edit a file",
+            children: Fragment({
+                children: [
+                    h("param", { name: "path", type: "string", required: true, children: "File path" }),
+                    h("param", { name: "search", type: "string", required: true, children: "Text to find" }),
+                ],
+            }),
+        })
+
+        const result = extract(tree)
+        expect(result.tools[0].parameters.required).toEqual(["path", "search"])
+        expect(result.tools[0].parameters.properties.path.description).toBe("File path")
+        expect(result.tools[0].parameters.properties.search.description).toBe("Text to find")
+    })
+
     test("strategy is extracted from prompt", () => {
         const tree = h("prompt", { strategy: "xml", children: [] })
         const result = extract(tree)

@@ -7,3 +7,5 @@ bench/logs/
 bench/results.json
 bench/output.txt
 bench/REPORT.md
+
+.docs

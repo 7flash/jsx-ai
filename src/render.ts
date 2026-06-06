@@ -117,29 +117,43 @@ function extractMessage(node: JsxAiNode & { type: "message" }): ExtractedMessage
 
 /** Collect all text content from a node tree */
 function collectText(children: JsxAiNode | JsxAiNode[] | string | undefined): string {
+    return collectTextRaw(children).trim()
+}
+
+function collectTextRaw(children: JsxAiNode | JsxAiNode[] | string | undefined): string {
     if (!children) return ""
     if (typeof children === "string") return children
 
-    if (!Array.isArray(children)) {
-        if (children.type === "text") return children.value
-        return ""
-    }
+    const nodes = Array.isArray(children) ? children : [children]
 
-    return children
+    return nodes
         .map(c => {
             if (typeof c === "string") return c
             if (c.type === "text") return c.value
+            if (c.type === "fragment") return collectTextRaw(c.children)
+            if ("props" in c) return collectTextRaw((c as any).props?.children)
             return ""
         })
         .join("")
-        .trim()
 }
 
 /** Collect all child nodes of a specific type */
 function collectNodes(children: JsxAiNode | JsxAiNode[] | undefined, type: string): JsxAiNode[] {
     if (!children) return []
-    if (!Array.isArray(children)) {
-        return children.type === type ? [children] : []
+
+    const nodes = Array.isArray(children) ? children : [children]
+    const result: JsxAiNode[] = []
+
+    for (const child of nodes) {
+        if (child.type === type) {
+            result.push(child)
+            continue
+        }
+
+        if (child.type === "fragment") {
+            result.push(...collectNodes(child.children, type))
+        }
     }
-    return children.filter(c => c.type === type)
+
+    return result
 }

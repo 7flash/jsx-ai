@@ -3,6 +3,7 @@
 //
 // Usage: bun run examples/coding-agent.tsx
 
+import { measure } from "measure-fn";
 import { callLLM, render } from "../src"
 
 // ── Reusable tool components ──
@@ -60,27 +61,4 @@ const prompt = (
     </prompt>
 )
 
-// ── Inspect what would be sent ──
-console.log("── Extracted prompt structure ──")
-const extracted = render(prompt)
-console.log(`Model: ${extracted.model}`)
-console.log(`System: ${extracted.system?.substring(0, 80)}...`)
-console.log(`Tools: [${extracted.tools.map(t => t.name).join(", ")}]`)
-console.log(`Messages: ${extracted.messages.length}`)
-console.log()
-
-// ── Call the LLM ──
-console.log("── Calling LLM ──")
-const result = await callLLM(prompt)
-
-console.log(`\nResponse:`)
-if (result.text) console.log(`  Text: ${result.text}`)
-if (result.toolCalls.length > 0) {
-    console.log(`  Tool calls:`)
-    for (const tc of result.toolCalls) {
-        console.log(`    ${tc.name}(${JSON.stringify(tc.args)})`)
-    }
-}
-if (result.usage) {
-    console.log(`  Tokens: ${result.usage.inputTokens} in → ${result.usage.outputTokens} out`)
-}
+await measure("main", () => callLLM(prompt))
