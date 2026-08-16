@@ -112,8 +112,12 @@ function executeTool(call: ToolCall): ExtractedMessage {
       default:
         return toolResult(call, `Unknown tool: ${call.name}`, true);
     }
-  } catch (error: any) {
-    return toolResult(call, error?.message || String(error), true);
+  } catch (error) {
+    return toolResult(
+      call,
+      error instanceof Error ? error.message : String(error),
+      true,
+    );
   }
 }
 

@@ -3,7 +3,7 @@
 //
 // Usage: bun run examples/coding-agent.tsx
 
-import { callLLM, render } from "../src";
+import { callLLM } from "../src";
 
 // ── Reusable tool components ──
 

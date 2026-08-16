@@ -1,6 +1,7 @@
 // NLT-style exhaustive tool assessment, extended with explicit PARAM markers.
 import type { ExtractedPrompt, RenderStrategy, ToolCall } from "../types";
 import { textProtocolMessages } from "../message";
+import { parseTextParams } from "./text-params";
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -92,46 +93,13 @@ function parseParams(
   body: string,
   prompt: ExtractedPrompt | undefined,
   toolName: string,
-): Record<string, any> {
+) {
   const tool = prompt?.tools.find(
-    (t) => t.name.toLowerCase() === toolName.toLowerCase(),
+    (candidate) => candidate.name.toLowerCase() === toolName.toLowerCase(),
   );
-  const declared = Object.keys(tool?.parameters.properties || {});
-  const canonical = new Map(declared.map((n) => [n.toLowerCase(), n]));
-  const lines = body.replace(/^\s*\n/, "").split("\n");
-
-  const explicit: Array<{ key: string; index: number; first: string }> = [];
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(
-      /^\s*PARAM\s+([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/i,
-    );
-    if (!match) continue;
-    const key =
-      canonical.get(match[1].toLowerCase()) ||
-      (!declared.length ? match[1] : undefined);
-    if (key) explicit.push({ key, index: i, first: match[2] });
-  }
-
-  // Backward compatibility for old NLT output. Only use legacy `name:` parsing when
-  // no explicit PARAM marker exists, and only for declared parameter names.
-  const starts = explicit.length
-    ? explicit
-    : lines.flatMap((line, index) => {
-        const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
-        if (!match) return [];
-        const key = canonical.get(match[1].toLowerCase());
-        return key ? [{ key, index, first: match[2] }] : [];
-      });
-
-  const args: Record<string, any> = {};
-  for (let i = 0; i < starts.length; i++) {
-    const current = starts[i];
-    const end = starts[i + 1]?.index ?? lines.length;
-    args[current.key] = [current.first, ...lines.slice(current.index + 1, end)]
-      .join("\n")
-      .trim();
-  }
-  return args;
+  return parseTextParams(body, Object.keys(tool?.parameters.properties ?? {}), {
+    allowLegacyBareParams: true,
+  });
 }
 
 export function parseNLTToolCalls(

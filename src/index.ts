@@ -26,6 +26,9 @@ export type {
   PromptEvent,
 } from "./llm";
 export type {
+  JsonPrimitive,
+  JsonValue,
+  JsonObject,
   BuiltinProviderName,
   ProviderName,
   BuiltinStrategyName,

@@ -1,4 +1,5 @@
 import { callLLM } from "./llm";
+import { errorMessage } from "./internal/errors";
 import type { CallOptions } from "./llm";
 import type {
   ExtractedMessage,
@@ -175,11 +176,24 @@ function normalizeToolResult(
   };
 }
 
-function positiveLimit(value: number | undefined, fallback: number): number {
+function finiteLimit(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
   if (value == null) return fallback;
   if (!Number.isFinite(value) || value < 0)
     throw new Error(
-      `Agent budget must be a finite non-negative number; received ${value}`,
+      `${name} must be a finite non-negative number; received ${value}`,
+    );
+  return value;
+}
+
+function budgetLimit(value: number | undefined): number {
+  if (value == null) return Number.POSITIVE_INFINITY;
+  if (Number.isNaN(value) || value < 0)
+    throw new Error(
+      `Agent budget must be a non-negative number; received ${value}`,
     );
   return value;
 }
@@ -203,31 +217,30 @@ export async function runAgent<State = undefined>(
   };
   const state = options.state as State;
   const startedAt = Date.now();
-  const maxSteps = positiveLimit(options.maxSteps, 12);
-  const maxToolCalls = positiveLimit(options.maxToolCalls, 64);
-  const maxInputTokens = positiveLimit(
-    options.maxInputTokens,
-    Number.POSITIVE_INFINITY,
-  );
-  const maxOutputTokens = positiveLimit(
-    options.maxOutputTokens,
-    Number.POSITIVE_INFINITY,
-  );
-  const maxDurationMs = positiveLimit(
-    options.maxDurationMs,
-    Number.POSITIVE_INFINITY,
-  );
+  const maxSteps = finiteLimit(options.maxSteps, 12, "maxSteps");
+  const maxToolCalls = finiteLimit(options.maxToolCalls, 64, "maxToolCalls");
+  const maxInputTokens = budgetLimit(options.maxInputTokens);
+  const maxOutputTokens = budgetLimit(options.maxOutputTokens);
+  const maxDurationMs = budgetLimit(options.maxDurationMs);
   const invoke = options.call || callLLM;
   let toolCallsExecuted = 0;
 
   const context = (step: number): AgentContext<State> => ({
     step,
-    history,
-    usage,
+    history: [...history],
+    usage: { ...usage },
     toolCallsExecuted,
     elapsedMs: Date.now() - startedAt,
     state,
   });
+
+  const budgetStopReason = (): AgentStopReason | undefined => {
+    if (options.signal?.aborted) return "aborted";
+    if (Date.now() - startedAt >= maxDurationMs) return "max_duration";
+    if (usage.inputTokens >= maxInputTokens) return "max_input_tokens";
+    if (usage.outputTokens >= maxOutputTokens) return "max_output_tokens";
+    return undefined;
+  };
 
   const emit = async (event: AgentEvent<State>) => {
     await options.onEvent?.(event);
@@ -250,13 +263,8 @@ export async function runAgent<State = undefined>(
   };
 
   for (let step = 0; step < maxSteps; step++) {
-    if (options.signal?.aborted) return finish("aborted", step);
-    if (Date.now() - startedAt >= maxDurationMs)
-      return finish("max_duration", step);
-    if (usage.inputTokens >= maxInputTokens)
-      return finish("max_input_tokens", step);
-    if (usage.outputTokens >= maxOutputTokens)
-      return finish("max_output_tokens", step);
+    const preStepStop = budgetStopReason();
+    if (preStepStop) return finish(preStepStop, step);
 
     await emit({ type: "model_start", context: context(step) });
     const stepStartedAt = Date.now();
@@ -342,9 +350,9 @@ export async function runAgent<State = undefined>(
           call,
           await options.executeTool(call, context(step)),
         );
-      } catch (error: any) {
+      } catch (error) {
         result = normalizeToolResult(call, {
-          content: error?.message || String(error),
+          content: errorMessage(error),
           isError: true,
         });
       }
@@ -353,16 +361,13 @@ export async function runAgent<State = undefined>(
       return result;
     };
 
-    const toolResults = options.parallelToolCalls
-      ? await Promise.all(calls.map(executeOne))
-      : await calls.reduce<Promise<ExtractedMessage[]>>(
-          async (promise, call) => {
-            const acc = await promise;
-            acc.push(await executeOne(call));
-            return acc;
-          },
-          Promise.resolve([]),
-        );
+    let toolResults: ExtractedMessage[];
+    if (options.parallelToolCalls) {
+      toolResults = await Promise.all(calls.map(executeOne));
+    } else {
+      toolResults = [];
+      for (const call of calls) toolResults.push(await executeOne(call));
+    }
 
     history.push(...toolResults);
     steps.push({
@@ -375,13 +380,8 @@ export async function runAgent<State = undefined>(
     if (await options.isComplete?.(response, toolResults, context(step))) {
       return finish("completed", step);
     }
-    if (options.signal?.aborted) return finish("aborted", step);
-    if (Date.now() - startedAt >= maxDurationMs)
-      return finish("max_duration", step);
-    if (usage.inputTokens >= maxInputTokens)
-      return finish("max_input_tokens", step);
-    if (usage.outputTokens >= maxOutputTokens)
-      return finish("max_output_tokens", step);
+    const postStepStop = budgetStopReason();
+    if (postStepStop) return finish(postStepStop, step);
   }
 
   return finish("max_steps", maxSteps);

@@ -1,5 +1,6 @@
 import type { ExtractedPrompt, RenderStrategy, ToolCall } from "../types";
 import { textProtocolMessages } from "../message";
+import { parseTextParams } from "./text-params";
 
 function toolsToNaturalLanguage(tools: ExtractedPrompt["tools"]): string {
   if (tools.length === 0) return "";
@@ -36,26 +37,11 @@ export function parseNaturalToolCalls(
   while ((match = callRegex.exec(text)) !== null) {
     const name = match[1].trim();
     if (toolNames.size && !toolNames.has(name)) continue;
-    const tool = prompt?.tools.find((t) => t.name === name);
-    const declared = new Set(Object.keys(tool?.parameters.properties || {}));
-    const lines = match[2].split("\n");
-    const starts: Array<{ key: string; index: number; first: string }> = [];
-    for (let i = 0; i < lines.length; i++) {
-      const pm = lines[i].match(
-        /^\s*PARAM\s+([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/i,
-      );
-      if (!pm) continue;
-      if (declared.size && !declared.has(pm[1])) continue;
-      starts.push({ key: pm[1], index: i, first: pm[2] });
-    }
-    const args: Record<string, any> = {};
-    for (let i = 0; i < starts.length; i++) {
-      const cur = starts[i];
-      const end = starts[i + 1]?.index ?? lines.length;
-      args[cur.key] = [cur.first, ...lines.slice(cur.index + 1, end)]
-        .join("\n")
-        .trim();
-    }
+    const tool = prompt?.tools.find((candidate) => candidate.name === name);
+    const args = parseTextParams(
+      match[2],
+      Object.keys(tool?.parameters.properties ?? {}),
+    );
     calls.push({ id: `natural_${calls.length}_${name}`, name, args });
   }
   return calls;

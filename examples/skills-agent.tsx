@@ -15,6 +15,7 @@ import {
   resolveSkills,
   md,
 } from "../src";
+import type { ToolCall } from "../src";
 import { resolve } from "path";
 
 const SKILLS_DIR = resolve(import.meta.dir, "../bench/skills");
@@ -110,9 +111,7 @@ function buildPrompt(
   );
 }
 
-function summarizeToolCalls(
-  toolCalls: Array<{ name: string; args: Record<string, any> }>,
-) {
+function summarizeToolCalls(toolCalls: readonly ToolCall[]) {
   if (toolCalls.length === 0) return "(none)";
   return toolCalls
     .map((tc) => `- ${tc.name}(${JSON.stringify(tc.args)})`)

@@ -1,15 +1,27 @@
+import {
+  array,
+  number,
+  parseJsonObject,
+  record,
+  string,
+} from "../internal/json";
 import type {
   ExtractedMessage,
+  JsonObject,
   PreparedPrompt,
   ProviderResponse,
   ToolCall,
 } from "../types";
-import type { Provider } from "./provider";
+import type { Provider, ProviderRequest } from "./provider";
 
 export class OpenAIProvider implements Provider {
-  name = "openai";
+  readonly name = "openai";
 
-  buildRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+  buildRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest {
     return {
       url: this.baseUrl(model),
       headers: {
@@ -20,40 +32,55 @@ export class OpenAIProvider implements Provider {
     };
   }
 
-  buildStreamRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+  buildStreamRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest {
     const request = this.buildRequest(prepared, model, apiKey);
-    request.body = { ...request.body, stream: true };
-    return request;
+    return { ...request, body: { ...request.body, stream: true } };
   }
 
-  parseStreamEvent(data: any): string {
-    return data.choices?.[0]?.delta?.content || "";
+  parseStreamEvent(data: unknown): string {
+    const choice = record(array(record(data)?.choices)[0]);
+    const delta = record(choice?.delta);
+    return string(delta?.content) ?? "";
   }
 
-  parseResponse(data: any): ProviderResponse {
-    const choice = data.choices?.[0];
-    const message = choice?.message || {};
+  parseResponse(data: unknown): ProviderResponse {
+    const root = record(data);
+    const choice = record(array(root?.choices)[0]);
+    const message = record(choice?.message);
     const nativeToolCalls: ToolCall[] = [];
 
-    for (const tc of message.tool_calls || []) {
-      if (tc.type !== "function") continue;
-      let args = {};
-      try {
-        args = JSON.parse(tc.function.arguments || "{}");
-      } catch {}
-      nativeToolCalls.push({ id: tc.id, name: tc.function.name, args });
+    for (const rawCall of array(message?.tool_calls)) {
+      const call = record(rawCall);
+      if (string(call?.type) !== "function") continue;
+      const fn = record(call?.function);
+      const name = string(fn?.name);
+      if (!name)
+        throw new Error("OpenAI returned a function tool call without a name");
+      const argumentText = string(fn?.arguments) ?? "{}";
+      nativeToolCalls.push({
+        ...(string(call?.id) ? { id: string(call?.id) } : {}),
+        name,
+        args: parseJsonObject(
+          argumentText,
+          `OpenAI tool call ${name} arguments`,
+        ),
+      });
     }
 
-    const usage = data.usage;
+    const usage = record(root?.usage);
     return {
-      text: message.content || "",
+      text: string(message?.content) ?? "",
       nativeToolCalls,
       raw: data,
-      finishReason: choice?.finish_reason,
+      finishReason: string(choice?.finish_reason),
       usage: usage
         ? {
-            inputTokens: usage.prompt_tokens || 0,
-            outputTokens: usage.completion_tokens || 0,
+            inputTokens: number(usage.prompt_tokens) ?? 0,
+            outputTokens: number(usage.completion_tokens) ?? 0,
           }
         : undefined,
     };
@@ -77,11 +104,10 @@ export class OpenAIProvider implements Provider {
     return `${base.replace(/\/$/, "")}/chat/completions`;
   }
 
-  private serializeMessage(message: ExtractedMessage): any {
+  private serializeMessage(message: ExtractedMessage): JsonObject {
     if (message.role === "tool") {
-      if (!message.toolCallId) {
+      if (!message.toolCallId)
         throw new Error("OpenAI tool-result messages require toolCallId");
-      }
       return {
         role: "tool",
         tool_call_id: message.toolCallId,
@@ -96,10 +122,7 @@ export class OpenAIProvider implements Provider {
         tool_calls: message.toolCalls.map((call, index) => ({
           id: call.id || `call_${index}_${call.name}`,
           type: "function",
-          function: {
-            name: call.name,
-            arguments: JSON.stringify(call.args || {}),
-          },
+          function: { name: call.name, arguments: JSON.stringify(call.args) },
         })),
       };
     }
@@ -107,14 +130,15 @@ export class OpenAIProvider implements Provider {
     return { role: message.role, content: message.content };
   }
 
-  private toBody(prepared: PreparedPrompt, model: string): any {
-    const messages: any[] = [];
+  private toBody(prepared: PreparedPrompt, model: string): JsonObject {
+    const messages = prepared.messages.map((message) =>
+      this.serializeMessage(message),
+    );
     if (prepared.system)
-      messages.push({ role: "system", content: prepared.system });
-    for (const m of prepared.messages) messages.push(this.serializeMessage(m));
+      messages.unshift({ role: "system", content: prepared.system });
 
     const isReasoning = /^o[0-9]/.test(model);
-    const body: any = {
+    const body: JsonObject = {
       model,
       messages,
       ...(isReasoning ? {} : { temperature: prepared.temperature ?? 0.1 }),
@@ -124,12 +148,12 @@ export class OpenAIProvider implements Provider {
     };
 
     if (prepared.nativeTools?.length) {
-      body.tools = prepared.nativeTools.map((t) => ({
+      body.tools = prepared.nativeTools.map((tool) => ({
         type: "function",
         function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
         },
       }));
       body.tool_choice = "auto";

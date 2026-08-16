@@ -29,4 +29,11 @@ describe("prompt IR", () => {
   test("unknown JSX tags fail loudly", () => {
     expect(() => jsx("tol", { name: "exec" })).toThrow(/Unknown JSX tag/);
   });
+
+  test("runtime validation catches invalid intrinsic props for JavaScript callers", () => {
+    expect(() => jsx("message", { role: "invalid", children: "x" })).toThrow(
+      /role must be/,
+    );
+    expect(() => jsx("tool", { name: "exec" })).toThrow(/description/);
+  });
 });

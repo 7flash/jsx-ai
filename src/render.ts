@@ -73,11 +73,10 @@ function extractTool(node: JsxAiNode & { type: "tool" }): ExtractedTool {
     { type: string; description: string; enum?: string[] }
   > = {};
   const required: string[] = [];
-  const paramNodes = collectNodes(node.props.children, "param");
+  const paramNodes = collectParamNodes(node.props.children);
 
   for (const param of paramNodes) {
-    if (param.type !== "param") continue;
-    const p = (param as ParamNode).props;
+    const p = param.props;
     const entry: { type: string; description: string; enum?: string[] } = {
       type: p.type || "string",
       description: p.children || "",
@@ -122,27 +121,34 @@ function collectTextRaw(
   if (typeof children === "string") return children;
   const nodes = Array.isArray(children) ? children : [children];
   return nodes
-    .map((c) => {
-      if (typeof c === "string") return c;
-      if (c.type === "text") return c.value;
-      if (c.type === "fragment") return collectTextRaw(c.children);
-      if ("props" in c) return collectTextRaw((c as any).props?.children);
-      return "";
+    .map((node) => {
+      switch (node.type) {
+        case "text":
+          return node.value;
+        case "fragment":
+          return collectTextRaw(node.children);
+        case "param":
+          return node.props.children ?? "";
+        case "tool":
+        case "message":
+        case "system":
+        case "prompt":
+          return collectTextRaw(node.props.children);
+      }
     })
     .join("");
 }
 
-function collectNodes(
+function collectParamNodes(
   children: JsxAiNode | JsxAiNode[] | undefined,
-  type: string,
-): JsxAiNode[] {
+): ParamNode[] {
   if (!children) return [];
   const nodes = Array.isArray(children) ? children : [children];
-  const result: JsxAiNode[] = [];
+  const result: ParamNode[] = [];
   for (const child of nodes) {
-    if (child.type === type) result.push(child);
+    if (child.type === "param") result.push(child);
     else if (child.type === "fragment")
-      result.push(...collectNodes(child.children, type));
+      result.push(...collectParamNodes(child.children));
   }
   return result;
 }

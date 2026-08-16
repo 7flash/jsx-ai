@@ -124,4 +124,25 @@ describe("runAgent", () => {
     expect(modelCalls).toBe(1);
     expect(result.toolCallsExecuted).toBe(1);
   });
+  test("event contexts are snapshots rather than live mutable history views", async () => {
+    let firstHistoryLength: number | undefined;
+    let firstContextHistory: readonly unknown[] | undefined;
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async () => response([{ name: "done", args: {} }]),
+      executeTool: () => "ok",
+      isComplete: (model) =>
+        model.toolCalls.some((call) => call.name === "done"),
+      onEvent: (event) => {
+        if (event.type === "model_start" && event.context.step === 0) {
+          firstHistoryLength = event.context.history.length;
+          firstContextHistory = event.context.history;
+        }
+      },
+    });
+
+    expect(firstHistoryLength).toBe(0);
+    expect(firstContextHistory).toHaveLength(0);
+    expect(result.history.length).toBeGreaterThan(0);
+  });
 });

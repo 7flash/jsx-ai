@@ -57,4 +57,11 @@ describe("XML strategy", () => {
     expect(calls[0].args.filePath).toBe("src/a&b.ts");
     expect(unescapeXml("&lt;&amp;&gt;")).toBe("<&>");
   });
+
+  test("keeps literal closing-tag text inside CDATA parameters", () => {
+    const calls = parseXMLToolCalls(
+      `<response><tool_calls><call tool="write_file"><param name="content"><![CDATA[const marker = "</param>";]]></param></call></tool_calls></response>`,
+    );
+    expect(calls[0].args.content).toBe('const marker = "</param>";');
+  });
 });

@@ -1,6 +1,7 @@
 import type {
   ExtractedMessage,
   ExtractedPrompt,
+  JsonObject,
   RenderStrategy,
   ToolCall,
 } from "../types";
@@ -90,10 +91,12 @@ export function buildXMLDocument(prompt: ExtractedPrompt): string {
   return parts.join("\n");
 }
 
-function decodeParam(raw: string): string {
-  const trimmed = raw.trim();
-  const cdata = trimmed.match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
-  return cdata ? cdata[1] : unescapeXml(trimmed);
+function decodeParam(
+  cdataValue: string | undefined,
+  escapedValue: string | undefined,
+): string {
+  if (cdataValue !== undefined) return cdataValue;
+  return unescapeXml((escapedValue ?? "").trim());
 }
 
 export function parseXMLToolCalls(text: string): ToolCall[] {
@@ -102,11 +105,18 @@ export function parseXMLToolCalls(text: string): ToolCall[] {
     /<call\s+tool="([^"]+)"(?:\s+id="([^"]+)")?\s*>([\s\S]*?)<\/call>/gi;
   let match: RegExpExecArray | null;
   while ((match = callRegex.exec(text)) !== null) {
-    const args: Record<string, any> = {};
-    const paramRegex = /<param\s+name="([^"]+)"\s*>([\s\S]*?)<\/param>/gi;
-    let pm: RegExpExecArray | null;
-    while ((pm = paramRegex.exec(match[3])) !== null)
-      args[unescapeXml(pm[1])] = decodeParam(pm[2]);
+    const args: JsonObject = {};
+    // Prefer a CDATA branch that must close before </param>; this prevents literal
+    // </param> text inside CDATA from prematurely terminating the parameter.
+    const paramRegex =
+      /<param\s+name="([^"]+)"\s*>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/param>/gi;
+    let paramMatch: RegExpExecArray | null;
+    while ((paramMatch = paramRegex.exec(match[3])) !== null) {
+      args[unescapeXml(paramMatch[1])] = decodeParam(
+        paramMatch[2],
+        paramMatch[3],
+      );
+    }
     calls.push({
       ...(match[2] ? { id: unescapeXml(match[2]) } : {}),
       name: unescapeXml(match[1]),

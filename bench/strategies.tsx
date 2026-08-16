@@ -14,6 +14,7 @@ import type {
 import { buildPrompt, SKILL_PATHS } from "./agent";
 import { BENCHMARK_SCENARIOS } from "./scenarios";
 import type { BenchmarkScenario, EvaluationResult } from "./scenarios";
+import { mean, percentile, seededShuffle, stddev, wilson } from "./statistics";
 
 const MODEL = process.env.BENCH_MODEL || "gemini-2.5-flash";
 const ITERATIONS = numberEnv("BENCH_ITERATIONS", 10);
@@ -262,8 +263,9 @@ async function runOne(
           ? "Continue the task using the available tools. If the implementation is truly complete, call done with a verification summary."
           : false,
     });
-  } catch (error: any) {
-    infrastructureError = error?.message || String(error);
+  } catch (error) {
+    infrastructureError =
+      error instanceof Error ? error.message : String(error);
   }
 
   const evaluation = await scenario.evaluate(workspace, runIndex);
@@ -303,58 +305,6 @@ async function runOne(
   };
   writeRunLog(run, agent);
   return run;
-}
-
-function seededShuffle<T>(items: readonly T[], seed: number): T[] {
-  const result = [...items];
-  let state = (seed + 1) * 0x9e3779b1;
-  const random = () => {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    return (state >>> 0) / 0x100000000;
-  };
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [result[i], result[j]] = [result[j], result[i]];
-  }
-  return result;
-}
-
-function mean(values: number[]): number {
-  return values.length
-    ? values.reduce((sum, value) => sum + value, 0) / values.length
-    : 0;
-}
-
-function stddev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const avg = mean(values);
-  return Math.sqrt(
-    values.reduce((sum, value) => sum + (value - avg) ** 2, 0) /
-      (values.length - 1),
-  );
-}
-
-function percentile(values: number[], p: number): number {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(
-    sorted.length - 1,
-    Math.max(0, Math.ceil(p * sorted.length) - 1),
-  );
-  return sorted[index]!;
-}
-
-function wilson(successes: number, n: number, z = 1.96): [number, number] {
-  if (!n) return [0, 0];
-  const phat = successes / n;
-  const z2 = z * z;
-  const denominator = 1 + z2 / n;
-  const center = (phat + z2 / (2 * n)) / denominator;
-  const margin =
-    (z * Math.sqrt((phat * (1 - phat) + z2 / (4 * n)) / n)) / denominator;
-  return [Math.max(0, center - margin), Math.min(1, center + margin)];
 }
 
 function summarize(results: BenchmarkRun[]): string {

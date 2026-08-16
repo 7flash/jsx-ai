@@ -1,15 +1,33 @@
+import {
+  array,
+  jsonObject,
+  jsonValue,
+  number,
+  record,
+  string,
+} from "../internal/json";
 import type {
   ExtractedMessage,
+  JsonObject,
   PreparedPrompt,
   ProviderResponse,
   ToolCall,
 } from "../types";
-import type { Provider } from "./provider";
+import type { Provider, ProviderRequest } from "./provider";
+
+interface GeminiContent {
+  role: string;
+  parts: JsonObject[];
+}
 
 export class GeminiProvider implements Provider {
-  name = "gemini";
+  readonly name = "gemini";
 
-  buildRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+  buildRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest {
     return {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -17,7 +35,11 @@ export class GeminiProvider implements Provider {
     };
   }
 
-  buildStreamRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+  buildStreamRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest {
     return {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -25,63 +47,72 @@ export class GeminiProvider implements Provider {
     };
   }
 
-  parseStreamEvent(data: any): string {
-    return (
-      data.candidates?.[0]?.content?.parts
-        ?.map((p: any) => p.text || "")
-        .join("") || ""
-    );
+  parseStreamEvent(data: unknown): string {
+    const root = record(data);
+    const candidate = record(array(root?.candidates)[0]);
+    const content = record(candidate?.content);
+    return array(content?.parts)
+      .map((part) => string(record(part)?.text) ?? "")
+      .join("");
   }
 
-  parseResponse(data: any): ProviderResponse {
-    const candidate = data.candidates?.[0];
-    const parts = candidate?.content?.parts || [];
-    let text = "";
+  parseResponse(data: unknown): ProviderResponse {
+    const root = record(data);
+    const candidate = record(array(root?.candidates)[0]);
+    const content = record(candidate?.content);
+    const parts = array(content?.parts);
     const nativeToolCalls: ToolCall[] = [];
+    let text = "";
 
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      if (part.text) text += part.text;
-      if (part.functionCall) {
-        nativeToolCalls.push({
-          id: `gemini_${i}_${part.functionCall.name}`,
-          name: part.functionCall.name,
-          args: part.functionCall.args || {},
-        });
-      }
+    for (let index = 0; index < parts.length; index++) {
+      const part = record(parts[index]);
+      if (!part) continue;
+      text += string(part.text) ?? "";
+      const functionCall = record(part.functionCall);
+      if (!functionCall) continue;
+      const name = string(functionCall.name);
+      if (!name)
+        throw new Error("Gemini returned a functionCall without a name");
+      nativeToolCalls.push({
+        id: `gemini_${index}_${name}`,
+        name,
+        args: jsonObject(
+          functionCall.args ?? {},
+          `Gemini tool call ${name} args`,
+        ),
+      });
     }
 
-    const usage = data.usageMetadata;
+    const usage = record(root?.usageMetadata);
     return {
       text,
       nativeToolCalls,
       raw: data,
-      finishReason: candidate?.finishReason,
+      finishReason: string(candidate?.finishReason),
       usage: usage
         ? {
-            inputTokens: usage.promptTokenCount || 0,
-            outputTokens: usage.candidatesTokenCount || 0,
-            thinkingTokens: usage.thoughtsTokenCount || 0,
+            inputTokens: number(usage.promptTokenCount) ?? 0,
+            outputTokens: number(usage.candidatesTokenCount) ?? 0,
+            thinkingTokens: number(usage.thoughtsTokenCount) ?? 0,
           }
         : undefined,
     };
   }
 
-  private resultPayload(content: string): Record<string, any> {
+  private resultPayload(content: string): JsonObject {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(content);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? parsed
-        : { result: parsed };
+      parsed = JSON.parse(content);
     } catch {
       return { result: content };
     }
+    const value = jsonValue(parsed, "Gemini tool result");
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : { result: value };
   }
 
-  private messageParts(message: ExtractedMessage): {
-    role: string;
-    parts: any[];
-  } {
+  private messageParts(message: ExtractedMessage): GeminiContent {
     if (message.role === "tool") {
       if (!message.toolName)
         throw new Error("Gemini tool-result messages require toolName");
@@ -98,18 +129,18 @@ export class GeminiProvider implements Provider {
       };
     }
 
-    const parts: any[] = [];
+    const parts: JsonObject[] = [];
     if (message.content) parts.push({ text: message.content });
-    for (const call of message.toolCalls || []) {
-      parts.push({ functionCall: { name: call.name, args: call.args || {} } });
+    for (const call of message.toolCalls ?? []) {
+      parts.push({ functionCall: { name: call.name, args: call.args } });
     }
     if (parts.length === 0) parts.push({ text: "" });
     return { role: message.role === "assistant" ? "model" : "user", parts };
   }
 
-  private toBody(prepared: PreparedPrompt): any {
+  private toBody(prepared: PreparedPrompt): JsonObject {
     // Gemini rejects consecutive same-role messages. Merge while preserving structured parts.
-    const contents: { role: string; parts: any[] }[] = [];
+    const contents: GeminiContent[] = [];
     for (const message of prepared.messages) {
       const serialized = this.messageParts(message);
       const last = contents[contents.length - 1];
@@ -117,8 +148,11 @@ export class GeminiProvider implements Provider {
       else contents.push(serialized);
     }
 
-    const body: any = {
-      contents,
+    const body: JsonObject = {
+      contents: contents.map((content) => ({
+        role: content.role,
+        parts: content.parts,
+      })),
       generationConfig: {
         temperature: prepared.temperature ?? 0.1,
         maxOutputTokens: prepared.maxTokens ?? 4000,
@@ -129,10 +163,10 @@ export class GeminiProvider implements Provider {
     if (prepared.nativeTools?.length) {
       body.tools = [
         {
-          functionDeclarations: prepared.nativeTools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
+          functionDeclarations: prepared.nativeTools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
           })),
         },
       ];

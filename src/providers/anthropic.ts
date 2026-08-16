@@ -1,15 +1,26 @@
+import { array, jsonObject, number, record, string } from "../internal/json";
 import type {
   ExtractedMessage,
+  JsonObject,
   PreparedPrompt,
   ProviderResponse,
   ToolCall,
 } from "../types";
-import type { Provider } from "./provider";
+import type { Provider, ProviderRequest } from "./provider";
+
+interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: JsonObject[];
+}
 
 export class AnthropicProvider implements Provider {
-  name = "anthropic";
+  readonly name = "anthropic";
 
-  buildRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+  buildRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest {
     return {
       url: "https://api.anthropic.com/v1/messages",
       headers: {
@@ -21,43 +32,60 @@ export class AnthropicProvider implements Provider {
     };
   }
 
-  buildStreamRequest(prepared: PreparedPrompt, model: string, apiKey: string) {
+  buildStreamRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest {
     const request = this.buildRequest(prepared, model, apiKey);
-    request.body = { ...request.body, stream: true };
-    return request;
+    return { ...request, body: { ...request.body, stream: true } };
   }
 
-  parseStreamEvent(data: any): string {
-    return data.type === "content_block_delta" &&
-      data.delta?.type === "text_delta"
-      ? data.delta.text || ""
+  parseStreamEvent(data: unknown): string {
+    const root = record(data);
+    if (string(root?.type) !== "content_block_delta") return "";
+    const delta = record(root?.delta);
+    return string(delta?.type) === "text_delta"
+      ? (string(delta?.text) ?? "")
       : "";
   }
 
-  parseResponse(data: any): ProviderResponse {
+  parseResponse(data: unknown): ProviderResponse {
+    const root = record(data);
     const nativeToolCalls: ToolCall[] = [];
     let text = "";
-    for (const block of data.content || []) {
-      if (block.type === "text") text += block.text;
-      else if (block.type === "tool_use") {
-        nativeToolCalls.push({
-          id: block.id,
-          name: block.name,
-          args: block.input || {},
-        });
+
+    for (const rawBlock of array(root?.content)) {
+      const block = record(rawBlock);
+      const type = string(block?.type);
+      if (type === "text") {
+        text += string(block?.text) ?? "";
+        continue;
       }
+      if (type !== "tool_use") continue;
+      const name = string(block?.name);
+      if (!name)
+        throw new Error("Anthropic returned a tool_use block without a name");
+      nativeToolCalls.push({
+        ...(string(block?.id) ? { id: string(block?.id) } : {}),
+        name,
+        args: jsonObject(
+          block?.input ?? {},
+          `Anthropic tool call ${name} input`,
+        ),
+      });
     }
 
-    const usage = data.usage;
+    const usage = record(root?.usage);
     return {
       text,
       nativeToolCalls,
       raw: data,
-      finishReason: data.stop_reason,
+      finishReason: string(root?.stop_reason),
       usage: usage
         ? {
-            inputTokens: usage.input_tokens || 0,
-            outputTokens: usage.output_tokens || 0,
+            inputTokens: number(usage.input_tokens) ?? 0,
+            outputTokens: number(usage.output_tokens) ?? 0,
           }
         : undefined,
     };
@@ -66,7 +94,7 @@ export class AnthropicProvider implements Provider {
   private serializeMessage(
     message: ExtractedMessage,
     index: number,
-  ): { role: "user" | "assistant"; content: any[] } {
+  ): AnthropicMessage {
     if (message.role === "tool") {
       if (!message.toolCallId)
         throw new Error("Anthropic tool-result messages require toolCallId");
@@ -83,45 +111,53 @@ export class AnthropicProvider implements Provider {
       };
     }
 
-    const content: any[] = [];
+    const content: JsonObject[] = [];
     if (message.content) content.push({ type: "text", text: message.content });
-    for (let i = 0; i < (message.toolCalls?.length || 0); i++) {
-      const call = message.toolCalls![i];
+    for (
+      let callIndex = 0;
+      callIndex < (message.toolCalls?.length ?? 0);
+      callIndex++
+    ) {
+      const call = message.toolCalls?.[callIndex];
+      if (!call) continue;
       content.push({
         type: "tool_use",
-        id: call.id || `toolu_${index}_${i}_${call.name}`,
+        id: call.id || `toolu_${index}_${callIndex}_${call.name}`,
         name: call.name,
-        input: call.args || {},
+        input: call.args,
       });
     }
     if (content.length === 0) content.push({ type: "text", text: "" });
     return { role: message.role, content };
   }
 
-  private toBody(prepared: PreparedPrompt, model: string): any {
+  private toBody(prepared: PreparedPrompt, model: string): JsonObject {
     // Anthropic requires alternating roles. Merge consecutive same-role messages,
     // including user tool_result blocks following ordinary user content.
-    const messages: Array<{ role: "user" | "assistant"; content: any[] }> = [];
-    for (let i = 0; i < prepared.messages.length; i++) {
-      const serialized = this.serializeMessage(prepared.messages[i], i);
+    const messages: AnthropicMessage[] = [];
+    for (let index = 0; index < prepared.messages.length; index++) {
+      const serialized = this.serializeMessage(prepared.messages[index], index);
       const last = messages[messages.length - 1];
       if (last?.role === serialized.role)
         last.content.push(...serialized.content);
       else messages.push(serialized);
     }
 
-    const body: any = {
+    const body: JsonObject = {
       model,
-      messages,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
       max_tokens: prepared.maxTokens ?? 4000,
       temperature: prepared.temperature ?? 0.1,
     };
     if (prepared.system) body.system = prepared.system;
     if (prepared.nativeTools?.length) {
-      body.tools = prepared.nativeTools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.parameters,
+      body.tools = prepared.nativeTools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.parameters,
       }));
     }
     return body;

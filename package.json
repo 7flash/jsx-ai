@@ -1,6 +1,6 @@
 {
   "name": "jsx-ai",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Composable JSX frontend and runtime for provider-agnostic LLM prompts, tools, agents, and end-to-end evaluation",
   "type": "module",
   "main": "src/index.ts",
@@ -14,7 +14,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "bench": "bun run bench/strategies.tsx",
-    "example:game": "bun run examples/game-builder-agent.tsx"
+    "example:game": "bun run examples/game-builder-agent.tsx",
+    "check": "bun test && tsc --noEmit"
   },
   "files": [
     "src",

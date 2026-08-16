@@ -1,4 +1,10 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "fs";
 import { dirname, join, relative } from "path";
 import { pathToFileURL } from "url";
 import { md } from "../src/index";
@@ -92,26 +98,41 @@ async function waitForServer(port: number, timeoutMs = 5000): Promise<boolean> {
         signal: AbortSignal.timeout(400),
       });
       return true;
-    } catch {}
+    } catch {
+      // Connection failures are expected while the server is still starting.
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
 }
 
-async function stopProcess(proc: any): Promise<void> {
+interface ManagedProcess {
+  kill(): void;
+  exited: Promise<number>;
+}
+
+async function stopProcess(proc: ManagedProcess | undefined): Promise<void> {
   if (!proc) return;
   try {
     proc.kill();
-  } catch {}
+  } catch {
+    /* process may already have exited */
+  }
   try {
     await Promise.race([
       proc.exited,
       new Promise((resolve) => setTimeout(resolve, 1000)),
     ]);
-  } catch {}
+  } catch {
+    // Cleanup is best-effort; evaluation results capture whether the server behaved correctly.
+  }
 }
 
-function startBunFile(workspace: string, file: string, port: number): any {
+function startBunFile(
+  workspace: string,
+  file: string,
+  port: number,
+): ManagedProcess {
   return Bun.spawn(["bun", "run", relative(workspace, file)], {
     cwd: workspace,
     env: { ...process.env, PORT: String(port) },
@@ -131,9 +152,23 @@ async function request(
       signal: AbortSignal.timeout(3000),
     });
     return { status: res.status, text: await res.text() };
-  } catch (error: any) {
-    return { status: 0, text: error?.message || String(error) };
+  } catch (error) {
+    return {
+      status: 0,
+      text: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function withFailureDetail(
+  passed: boolean,
+  detail: string | undefined,
+): Pick<EvaluationCheck, "passed" | "detail"> {
+  return passed ? { passed } : { passed, ...(detail ? { detail } : {}) };
 }
 
 const kvStore: BenchmarkScenario = {
@@ -192,8 +227,9 @@ const kvStore: BenchmarkScenario = {
       persistence_restart: false,
     };
 
-    let first: any;
-    let second: any;
+    let first: ManagedProcess | undefined;
+    let second: ManagedProcess | undefined;
+    let runtimeFailure: string | undefined;
     if (serverFile) {
       const port = 24000 + (runIndex % 10000);
       try {
@@ -258,7 +294,8 @@ const kvStore: BenchmarkScenario = {
               persisted.status === 200 && persisted.text.includes("persist-me");
           }
         }
-      } catch {
+      } catch (error) {
+        runtimeFailure = describeError(error);
       } finally {
         await stopProcess(first);
         await stopProcess(second);
@@ -268,27 +305,43 @@ const kvStore: BenchmarkScenario = {
     checks.push(
       {
         name: "server_starts_on_requested_port",
-        passed: dynamic.server_starts,
         weight: 10,
+        ...withFailureDetail(dynamic.server_starts, runtimeFailure),
       },
-      { name: "missing_returns_404", passed: dynamic.missing_404, weight: 5 },
-      { name: "set_then_get", passed: dynamic.set_get, weight: 15 },
+      {
+        name: "missing_returns_404",
+        weight: 5,
+        ...withFailureDetail(dynamic.missing_404, runtimeFailure),
+      },
+      {
+        name: "set_then_get",
+        weight: 15,
+        ...withFailureDetail(dynamic.set_get, runtimeFailure),
+      },
       {
         name: "lists_nonexpired_keys",
-        passed: dynamic.list_nonexpired,
         weight: 10,
+        ...withFailureDetail(dynamic.list_nonexpired, runtimeFailure),
       },
-      { name: "ttl_returns_404", passed: dynamic.ttl_expiration, weight: 15 },
+      {
+        name: "ttl_returns_404",
+        weight: 15,
+        ...withFailureDetail(dynamic.ttl_expiration, runtimeFailure),
+      },
       {
         name: "expired_removed_from_list",
-        passed: dynamic.ttl_cleanup_list,
         weight: 5,
+        ...withFailureDetail(dynamic.ttl_cleanup_list, runtimeFailure),
       },
-      { name: "delete_removes_key", passed: dynamic.delete, weight: 10 },
+      {
+        name: "delete_removes_key",
+        weight: 10,
+        ...withFailureDetail(dynamic.delete, runtimeFailure),
+      },
       {
         name: "sqlite_survives_restart",
-        passed: dynamic.persistence_restart,
         weight: 10,
+        ...withFailureDetail(dynamic.persistence_restart, runtimeFailure),
       },
     );
     return scoreChecks(checks);
@@ -324,10 +377,7 @@ const ttlCache: BenchmarkScenario = {
   },
   async evaluate(workspace) {
     const target = join(workspace, "src/cache.ts");
-    let source = "";
-    try {
-      source = readFileSync(target, "utf8");
-    } catch {}
+    const source = existsSync(target) ? readFileSync(target, "utf8") : "";
     const all = sourceSnapshot(workspace)
       .map((item) => item.source)
       .join("\n");
@@ -364,6 +414,7 @@ const ttlCache: BenchmarkScenario = {
       overwrite_refreshes_ttl: false,
     };
 
+    let runtimeFailure: string | undefined;
     if (source) {
       const moduleUrl = pathToFileURL(target).href + `?bench=${Date.now()}`;
       const script = `
@@ -396,26 +447,56 @@ const ttlCache: BenchmarkScenario = {
         const stdoutPromise = new Response(proc.stdout).text();
         const stderrPromise = new Response(proc.stderr).text();
         const exitCode = await proc.exited;
-        const stdout = await stdoutPromise;
-        await stderrPromise;
+        const [stdout, stderr] = await Promise.all([
+          stdoutPromise,
+          stderrPromise,
+        ]);
         if (exitCode === 0) {
           const line = stdout.trim().split("\n").pop() || "{}";
           Object.assign(dynamic, JSON.parse(line));
+        } else {
+          runtimeFailure = `TTL cache evaluator exited ${exitCode}: ${stderr.slice(0, 1000)}`;
         }
-      } catch {}
+      } catch (error) {
+        runtimeFailure = describeError(error);
+      }
     }
 
     checks.push(
-      { name: "set_then_get", passed: dynamic.set_get, weight: 15 },
-      { name: "missing_is_undefined", passed: dynamic.missing, weight: 5 },
-      { name: "delete_semantics", passed: dynamic.delete, weight: 10 },
-      { name: "keys_lists_live_entries", passed: dynamic.keys, weight: 10 },
-      { name: "ttl_expires", passed: dynamic.ttl_expiration, weight: 20 },
-      { name: "keys_cleans_expired", passed: dynamic.cleanup_keys, weight: 10 },
+      {
+        name: "set_then_get",
+        weight: 15,
+        ...withFailureDetail(dynamic.set_get, runtimeFailure),
+      },
+      {
+        name: "missing_is_undefined",
+        weight: 5,
+        ...withFailureDetail(dynamic.missing, runtimeFailure),
+      },
+      {
+        name: "delete_semantics",
+        weight: 10,
+        ...withFailureDetail(dynamic.delete, runtimeFailure),
+      },
+      {
+        name: "keys_lists_live_entries",
+        weight: 10,
+        ...withFailureDetail(dynamic.keys, runtimeFailure),
+      },
+      {
+        name: "ttl_expires",
+        weight: 20,
+        ...withFailureDetail(dynamic.ttl_expiration, runtimeFailure),
+      },
+      {
+        name: "keys_cleans_expired",
+        weight: 10,
+        ...withFailureDetail(dynamic.cleanup_keys, runtimeFailure),
+      },
       {
         name: "overwrite_refreshes_ttl",
-        passed: dynamic.overwrite_refreshes_ttl,
         weight: 10,
+        ...withFailureDetail(dynamic.overwrite_refreshes_ttl, runtimeFailure),
       },
     );
     return scoreChecks(checks);

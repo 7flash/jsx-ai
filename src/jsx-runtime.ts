@@ -1,64 +1,49 @@
 // ── Custom JSX Runtime for jsx-ai ──
-// This replaces React's createElement — every <tag> becomes a JsxAiNode
-//
-// Also exports `md` — a dedent tagged template for clean multi-line text in JSX:
-//   <system>{md`
-//       You are an expert.
-//       - Rule one
-//       - Rule two
-//   `}</system>
+// This replaces React's createElement — every supported intrinsic tag becomes a JsxAiNode.
 
-import type { JsxAiNode } from "./types";
+import { jsonObject, record } from "./internal/json";
+import type {
+  JsxAiNode,
+  MessageNode,
+  ParamNode,
+  PromptNode,
+  SystemNode,
+  ToolCall,
+  ToolNode,
+} from "./types";
 
-// Component function type
-type Component = (props: any) => JsxAiNode;
+export type JsxChild =
+  JsxAiNode | string | number | boolean | null | undefined | JsxChild[];
 
-/**
- * JSX factory — called by the transpiler for every JSX element.
- *
- * <tool name="exec" description="Run a command">  →  jsx("tool", { name: "exec", description: "..." })
- * <MyComponent foo="bar" />                        →  jsx(MyComponent, { foo: "bar" })
- */
+type FunctionComponent<Props> = (props: Props) => JsxAiNode;
+
+type RuntimeProps = Record<string, unknown> & { children?: JsxChild };
+
+export function jsx<Props>(
+  tag: FunctionComponent<Props>,
+  props: Props,
+): JsxAiNode;
+export function jsx(tag: string, props?: RuntimeProps): JsxAiNode;
 export function jsx(
-  tag: string | Component,
-  props: Record<string, any> = {},
+  tag: string | FunctionComponent<never>,
+  props: RuntimeProps = {},
 ): JsxAiNode {
-  // Function component — call it and return its output
-  if (typeof tag === "function") {
-    return tag(props);
-  }
+  if (typeof tag === "function") return tag(props as never);
 
-  // Normalize children
   const { children, ...rest } = props;
   const normalizedChildren = normalizeChildren(children);
 
-  // Built-in tags map to node types
   switch (tag) {
     case "tool":
-      return {
-        type: "tool",
-        props: { ...rest, children: normalizedChildren },
-      } as any;
+      return toolNode(rest, normalizedChildren);
     case "param":
-      return {
-        type: "param",
-        props: { ...rest, children: extractText(normalizedChildren) },
-      } as any;
+      return paramNode(rest, normalizedChildren);
     case "message":
-      return {
-        type: "message",
-        props: { ...rest, children: normalizedChildren },
-      } as any;
+      return messageNode(rest, normalizedChildren);
     case "system":
-      return {
-        type: "system",
-        props: { ...rest, children: normalizedChildren },
-      } as any;
+      return systemNode(normalizedChildren);
     case "prompt":
-      return {
-        type: "prompt",
-        props: { ...rest, children: normalizedChildren },
-      } as any;
+      return promptNode(rest, normalizedChildren);
     default:
       throw new Error(
         `[jsx-ai] Unknown JSX tag <${tag}>. Supported tags: prompt, system, message, tool, param.`,
@@ -66,11 +51,11 @@ export function jsx(
   }
 }
 
-/** jsxs — same as jsx but for static children (React 17+ automatic runtime) */
+/** jsxs — same as jsx but used by the automatic runtime for static children. */
 export const jsxs = jsx;
 
-/** Fragment support: <></> becomes a FragmentNode */
-export function Fragment(props: { children?: any }): JsxAiNode {
+/** Fragment support: <></> becomes a FragmentNode. */
+export function Fragment(props: { children?: JsxChild }): JsxAiNode {
   const children = normalizeChildren(props.children);
   return {
     type: "fragment",
@@ -78,106 +63,250 @@ export function Fragment(props: { children?: any }): JsxAiNode {
   };
 }
 
-// ── Helpers ──
+function toolNode(
+  props: Record<string, unknown>,
+  children: JsxAiNode | JsxAiNode[] | undefined,
+): ToolNode {
+  return {
+    type: "tool",
+    props: {
+      name: requiredString(props.name, "tool", "name"),
+      description: requiredString(props.description, "tool", "description"),
+      children,
+    },
+  };
+}
 
-function normalizeChildren(children: any): JsxAiNode | JsxAiNode[] | undefined {
-  if (children == null) return undefined;
-  if (typeof children === "string")
-    return { type: "text" as const, value: children };
-  if (typeof children === "number")
-    return { type: "text" as const, value: String(children) };
-  if (Array.isArray(children)) {
-    return children.flatMap((c) => {
-      if (c == null || c === false) return [];
-      if (typeof c === "string") return [{ type: "text" as const, value: c }];
-      if (typeof c === "number")
-        return [{ type: "text" as const, value: String(c) }];
-      if (Array.isArray(c)) return c;
-      return [c];
-    });
+function paramNode(
+  props: Record<string, unknown>,
+  children: JsxAiNode | JsxAiNode[] | undefined,
+): ParamNode {
+  const enumValues =
+    props.enum === undefined
+      ? undefined
+      : stringArray(props.enum, "param", "enum");
+  return {
+    type: "param",
+    props: {
+      name: requiredString(props.name, "param", "name"),
+      ...(typeof props.type === "string" ? { type: props.type } : {}),
+      ...(props.required === true ? { required: true } : {}),
+      ...(enumValues ? { enum: enumValues } : {}),
+      ...(extractText(children) !== undefined
+        ? { children: extractText(children) }
+        : {}),
+    },
+  };
+}
+
+function messageNode(
+  props: Record<string, unknown>,
+  children: JsxAiNode | JsxAiNode[] | undefined,
+): MessageNode {
+  const role = props.role;
+  if (role !== "user" && role !== "assistant" && role !== "tool") {
+    throw new TypeError(
+      `<message> role must be user, assistant, or tool; received ${String(role)}`,
+    );
   }
-  return children as JsxAiNode;
+  const toolCalls =
+    props.toolCalls === undefined ? undefined : toolCallArray(props.toolCalls);
+  return {
+    type: "message",
+    props: {
+      role,
+      ...(toolCalls ? { toolCalls } : {}),
+      ...(typeof props.toolCallId === "string"
+        ? { toolCallId: props.toolCallId }
+        : {}),
+      ...(typeof props.toolName === "string"
+        ? { toolName: props.toolName }
+        : {}),
+      ...(props.isError === true ? { isError: true } : {}),
+      children,
+    },
+  };
+}
+
+function systemNode(children: JsxAiNode | JsxAiNode[] | undefined): SystemNode {
+  return { type: "system", props: { children } };
+}
+
+function promptNode(
+  props: Record<string, unknown>,
+  children: JsxAiNode | JsxAiNode[] | undefined,
+): PromptNode {
+  return {
+    type: "prompt",
+    props: {
+      ...(typeof props.model === "string" ? { model: props.model } : {}),
+      ...(typeof props.provider === "string"
+        ? { provider: props.provider }
+        : {}),
+      ...(typeof props.temperature === "number"
+        ? { temperature: props.temperature }
+        : {}),
+      ...(typeof props.maxTokens === "number"
+        ? { maxTokens: props.maxTokens }
+        : {}),
+      ...(typeof props.strategy === "string"
+        ? { strategy: props.strategy }
+        : {}),
+      children,
+    },
+  };
+}
+
+function requiredString(value: unknown, tag: string, prop: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`<${tag}> requires a non-empty ${prop} string`);
+  }
+  return value;
+}
+
+function stringArray(value: unknown, tag: string, prop: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
+    throw new TypeError(`<${tag}> ${prop} must be a string array`);
+  }
+  return value;
+}
+
+function toolCallArray(value: unknown): ToolCall[] {
+  if (!Array.isArray(value))
+    throw new TypeError("<message> toolCalls must be an array");
+  return value.map((item, index) => {
+    const candidate = record(item);
+    if (!candidate) {
+      throw new TypeError(`<message> toolCalls[${index}] must be an object`);
+    }
+    if (typeof candidate.name !== "string" || candidate.name.length === 0) {
+      throw new TypeError(
+        `<message> toolCalls[${index}] requires a non-empty name`,
+      );
+    }
+    if (candidate.id !== undefined && typeof candidate.id !== "string") {
+      throw new TypeError(
+        `<message> toolCalls[${index}].id must be a string when provided`,
+      );
+    }
+    return {
+      ...(candidate.id ? { id: candidate.id } : {}),
+      name: candidate.name,
+      args: jsonObject(
+        candidate.args ?? {},
+        `<message> toolCalls[${index}].args`,
+      ),
+    };
+  });
+}
+
+function normalizeChildren(
+  children: JsxChild,
+): JsxAiNode | JsxAiNode[] | undefined {
+  if (children == null || children === false || children === true)
+    return undefined;
+  if (typeof children === "string" || typeof children === "number") {
+    return { type: "text", value: String(children) };
+  }
+  if (Array.isArray(children)) {
+    const normalized: JsxAiNode[] = [];
+    for (const child of children) {
+      const value = normalizeChildren(child);
+      if (Array.isArray(value)) normalized.push(...value);
+      else if (value) normalized.push(value);
+    }
+    return normalized;
+  }
+  if (isJsxNode(children)) return children;
+  throw new TypeError("Invalid JSX child passed to jsx-ai");
+}
+
+function isJsxNode(value: unknown): value is JsxAiNode {
+  const candidate = record(value);
+  if (!candidate) return false;
+  const type = candidate.type;
+  return (
+    type === "tool" ||
+    type === "param" ||
+    type === "message" ||
+    type === "system" ||
+    type === "prompt" ||
+    type === "text" ||
+    type === "fragment"
+  );
 }
 
 function extractText(
   children: JsxAiNode | JsxAiNode[] | undefined,
 ): string | undefined {
   if (!children) return undefined;
-  if (!Array.isArray(children)) {
-    return children.type === "text" ? children.value : undefined;
-  }
-  return children
-    .filter((c): c is { type: "text"; value: string } => c.type === "text")
-    .map((c) => c.value)
+  const nodes = Array.isArray(children) ? children : [children];
+  const text = nodes
+    .filter(
+      (node): node is { type: "text"; value: string } => node.type === "text",
+    )
+    .map((node) => node.value)
     .join("");
+  return text || undefined;
 }
 
-// ── Dedent tagged template ──
-
-/**
- * Dedent tagged template — strips common leading indentation from multi-line text.
- * Use inside JSX tags where plain text would lose newlines:
- *
- *   <system>{md`
- *       You are an expert developer.
- *       - Use clean architecture
- *       - Write tests for everything
- *   `}</system>
- */
-export function md(strings: TemplateStringsArray, ...values: any[]): string {
-  // Interpolate template
-  let text = strings.reduce((acc, str, i) => acc + str + (values[i] ?? ""), "");
-
-  // Split into lines, remove first/last empty lines
-  const lines = text.split("\n");
-  if (lines[0]!.trim() === "") lines.shift();
-  if (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
-
-  // Find minimum indentation (ignoring empty lines)
-  const indent = lines
-    .filter((l) => l.trim().length > 0)
-    .reduce((min, l) => {
-      const spaces = l.match(/^(\s*)/)?.[1]?.length ?? 0;
-      return Math.min(min, spaces);
-    }, Infinity);
-
-  // Strip common indent
-  return (indent === Infinity ? lines : lines.map((l) => l.slice(indent))).join(
-    "\n",
+/** Dedent tagged template for readable multi-line prompt text inside JSX. */
+export function md(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+): string {
+  const text = strings.reduce(
+    (acc, part, index) => acc + part + String(values[index] ?? ""),
+    "",
   );
+  const lines = text.split("\n");
+  if (lines[0]?.trim() === "") lines.shift();
+  if (lines.at(-1)?.trim() === "") lines.pop();
+
+  const indent = lines
+    .filter((line) => line.trim().length > 0)
+    .reduce(
+      (minimum, line) =>
+        Math.min(minimum, line.match(/^(\s*)/)?.[1]?.length ?? 0),
+      Infinity,
+    );
+
+  return (
+    indent === Infinity ? lines : lines.map((line) => line.slice(indent))
+  ).join("\n");
 }
 
-// ── JSX namespace for TypeScript ──
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      tool: { name: string; description: string; children?: any };
+      tool: { name: string; description: string; children?: JsxChild };
       param: {
         name: string;
         type?: string;
         required?: boolean;
         enum?: string[];
-        children?: any;
+        children?: JsxChild;
       };
       message: {
         role: "user" | "assistant" | "tool";
-        toolCalls?: import("./types").ToolCall[];
+        toolCalls?: ToolCall[];
         toolCallId?: string;
         toolName?: string;
         isError?: boolean;
-        children?: any;
+        children?: JsxChild;
       };
-      system: { children?: any };
+      system: { children?: JsxChild };
       prompt: {
         model?: string;
         provider?: import("./types").ProviderName;
         temperature?: number;
         maxTokens?: number;
         strategy?: import("./types").StrategyName;
-        children?: any;
+        children?: JsxChild;
       };
     }
-    // Removed `type Element = JsxAiNode` — causes TS2300 in consuming projects
-    // that also declare JSX.Element (React, DOM lib, etc.)
   }
 }

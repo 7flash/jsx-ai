@@ -1,6 +1,12 @@
 // ── JSX-AI Node Types ──
 // The virtual tree produced by JSX before rendering to an API request.
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
 export type BuiltinProviderName = "gemini" | "openai" | "anthropic";
 export type ProviderName = BuiltinProviderName | (string & {});
 export type BuiltinStrategyName =
@@ -11,7 +17,7 @@ export interface ToolCall {
   /** Provider tool-call identifier when the protocol supplies one. */
   id?: string;
   name: string;
-  args: Record<string, any>;
+  args: JsonObject;
 }
 
 export type JsxAiNode =
@@ -151,7 +157,7 @@ export interface PreparedPrompt {
 export interface ProviderResponse {
   text: string;
   nativeToolCalls: ToolCall[];
-  raw: any;
+  raw: unknown;
   finishReason?: string;
   usage?: {
     inputTokens: number;
@@ -163,9 +169,9 @@ export interface ProviderResponse {
 export interface LLMResponse {
   text: string;
   toolCalls: ToolCall[];
-  raw: any;
+  raw: unknown;
   /** Canonical request data is included so logs do not need provider-specific introspection. */
-  request?: { url: string; body: any; prepared: PreparedPrompt };
+  request?: { url: string; body: JsonObject; prepared: PreparedPrompt };
   finishReason?: string;
   usage?: {
     inputTokens: number;
