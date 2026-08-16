@@ -1,529 +1,497 @@
-// ── callLLM — the main entry point ──
-//
-// Architecture:
-//   Strategy (provider-agnostic)  →  Provider (Gemini/OpenAI)  →  HTTP
-//
-//   1. strategy.prepare(prompt) → PreparedPrompt  (no API specifics)
-//   2. provider.buildRequest(prepared) → URL + headers + body
-//   3. provider.parseResponse(data) → ProviderResponse
-//   4. strategy.parseResponse(providerResponse) → text + toolCalls
-//
-// Strategies never touch API bodies. Providers never touch tool formatting.
+// ── jsx-ai LLM runtime ──
+// JSX → canonical IR → strategy lowering → provider backend → normalized response.
 
-import type { JsxAiNode, LLMResponse, RenderStrategy, ExtractedPrompt } from "./types"
-import type { Provider } from "./providers/provider"
-import { GeminiProvider } from "./providers/gemini"
-import { OpenAIProvider } from "./providers/openai"
-import { AnthropicProvider } from "./providers/anthropic"
-import { extract } from "./render"
-import { native } from "./strategies/native"
-import { xml } from "./strategies/xml"
-import { natural } from "./strategies/natural"
-import { hybrid } from "./strategies/hybrid"
-import { nlt } from "./strategies/nlt"
+import { readFileSync } from "fs";
+import { resolve as resolvePath } from "path";
+import type {
+  ExtractedMessage,
+  ExtractedPrompt,
+  JsxAiNode,
+  LLMResponse,
+  PreparedPrompt,
+  ProviderName,
+  RenderStrategy,
+  StrategyName,
+} from "./types";
+import type { Provider } from "./providers/provider";
+import { GeminiProvider } from "./providers/gemini";
+import { OpenAIProvider } from "./providers/openai";
+import { AnthropicProvider } from "./providers/anthropic";
+import { extract } from "./render";
+import { native } from "./strategies/native";
+import { xml } from "./strategies/xml";
+import { natural } from "./strategies/natural";
+import { hybrid } from "./strategies/hybrid";
+import { nlt } from "./strategies/nlt";
 
-export type { LLMResponse }
+export type { LLMResponse };
 
-export interface CallOptions {
-    /** API key (defaults to env vars based on provider) */
-    apiKey?: string
-    /** Provider to use: "gemini" | "openai". Default: auto-detected from model name */
-    provider?: "gemini" | "openai"
-    /** Override the strategy ("native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"). Default: "auto" */
-    strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
-    /** Override the model */
-    model?: string
-    /** Override temperature */
-    temperature?: number
-    /** Override max tokens */
-    maxTokens?: number
+export interface RequestOptions {
+  apiKey?: string;
+  /** Total request/body timeout per attempt. Default: 60 seconds. */
+  timeoutMs?: number;
+  /** Number of retries after the first attempt. Default: 3. */
+  retries?: number;
 }
 
-const STRATEGIES: Record<string, RenderStrategy> = { native, xml, natural, hybrid, nlt }
+export interface CallOptions extends RequestOptions {
+  provider?: ProviderName;
+  strategy?: StrategyName;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+const STRATEGIES: Record<string, RenderStrategy> = {
+  native,
+  xml,
+  natural,
+  hybrid,
+  nlt,
+};
 const PROVIDERS: Record<string, Provider> = {
-    gemini: new GeminiProvider(),
-    openai: new OpenAIProvider(),
-    anthropic: new AnthropicProvider(),
-}
+  gemini: new GeminiProvider(),
+  openai: new OpenAIProvider(),
+  anthropic: new AnthropicProvider(),
+};
 
-// ── Hook System ──
-// Hooks receive telemetry for every LLM call (prompt, response, timing, cost)
+// ── Hooks / telemetry ──
 
 export interface PromptEvent {
-    id: string
-    timestamp: number
-    method: "callLLM" | "callText" | "streamLLM"
-    model: string
-    provider: string
-    strategy?: string
-    messages: Array<{ role: string; content: string }>
-    system?: string
-    tools?: string[]
-    response: {
-        text: string
-        toolCalls?: Array<{ name: string; args: any }>
-    }
-    usage?: {
-        inputTokens: number
-        outputTokens: number
-        thinkingTokens?: number
-    }
-    durationMs: number
-    error?: string
+  id: string;
+  timestamp: number;
+  method: "callLLM" | "callText" | "streamLLM";
+  model: string;
+  provider: string;
+  strategy?: string;
+  messages: Array<{ role: string; content: string }>;
+  system?: string;
+  tools?: string[];
+  response: { text: string; toolCalls?: Array<{ name: string; args: any }> };
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    thinkingTokens?: number;
+  };
+  durationMs: number;
+  error?: string;
 }
 
-export type PromptHook = (event: PromptEvent) => void | Promise<void>
+export type PromptHook = (event: PromptEvent) => void | Promise<void>;
 
-const hooks: PromptHook[] = []
+const HOOKS_KEY = Symbol.for("jsx-ai.prompt-hooks");
+const hookState = globalThis as typeof globalThis & {
+  [HOOKS_KEY]?: PromptHook[];
+};
+const hooks = hookState[HOOKS_KEY] ?? (hookState[HOOKS_KEY] = []);
 
-/** Register a hook that receives telemetry for every LLM call */
-export function registerHook(hook: PromptHook): void {
-    hooks.push(hook)
+export function registerHook(hook: PromptHook): () => void {
+  hooks.push(hook);
+  return () => {
+    const index = hooks.indexOf(hook);
+    if (index >= 0) hooks.splice(index, 1);
+  };
 }
 
-/** Fire all hooks (async, non-blocking) */
-function fireHooks(event: PromptEvent): void {
-    for (const hook of hooks) {
-        try { Promise.resolve(hook(event)).catch(() => { }) } catch { }
-    }
-}
-
-let hookIdCounter = 0
+let hookIdCounter = 0;
 function generateId(): string {
-    return `${Date.now()}-${++hookIdCounter}`
+  return `${Date.now()}-${++hookIdCounter}`;
 }
 
-// Auto-register explorer hook — checks env lazily so it works
-// even if JSX_AI_EXPLORER_URL is set after module load
-registerHook(async (event) => {
-    const url = process.env.JSX_AI_EXPLORER_URL
-    if (!url) return
+function fireHooks(event: PromptEvent): void {
+  for (const hook of [...hooks]) {
     try {
-        await fetch(`${url}/api/prompts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(event),
-        })
-    } catch { }
-})
+      Promise.resolve(hook(event)).catch(() => {});
+    } catch {}
+  }
 
-/** Register a custom provider */
+  // Explorer telemetry is an environment-level sink, not a self-registering hook.
+  // This avoids duplicate posts when the package is resolved through two module paths.
+  const url = process.env.JSX_AI_EXPLORER_URL;
+  if (url) {
+    void fetch(`${url.replace(/\/$/, "")}/api/prompts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch(() => {});
+  }
+}
+
+// ── Registration / resolution ──
+
 export function registerProvider(name: string, provider: Provider): void {
-    PROVIDERS[name] = provider
+  PROVIDERS[name] = provider;
 }
 
-/** Resolve which strategy to use */
-function resolveStrategy(prompt: ExtractedPrompt, override?: string): RenderStrategy {
-    const choice = override || prompt.strategy || "auto"
-    return STRATEGIES[choice] || hybrid
-}
-
-/** Detect provider from model name */
-function detectProvider(model: string): string {
-    if (/^(gpt-|o[0-9]|chatgpt)/i.test(model)) return "openai"
-    if (/^claude/i.test(model)) return "anthropic"
-    if (/^(deepseek|qwen)/i.test(model)) return "openai" // DeepSeek & Qwen use OpenAI-compatible API
-    return "gemini"
-}
-
-/** Resolve provider instance */
-function resolveProvider(model: string, override?: string): Provider {
-    const name = override || detectProvider(model)
-    const provider = PROVIDERS[name]
-    if (!provider) throw new Error(`Unknown provider: ${name}. Available: ${Object.keys(PROVIDERS).join(", ")}`)
-    return provider
-}
-
-/** Resolve API key from options or env vars */
-function resolveApiKey(provider: Provider, options?: CallOptions): string {
-    if (options?.apiKey) return options.apiKey
-
-    if (provider.name === "openai") {
-        if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
-        if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY
-        if (process.env.QWEN_API_KEY) return process.env.QWEN_API_KEY
-        if (process.env.DASHSCOPE_API_KEY) return process.env.DASHSCOPE_API_KEY
-    } else if (provider.name === "anthropic") {
-        if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY
-    } else {
-        if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY
-        if (process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY
-    }
-
-    // Try .config.toml
-    try {
-        const fs = require("fs")
-        const path = require("path")
-        const toml = fs.readFileSync(path.resolve(process.cwd(), ".config.toml"), "utf-8")
-        const match = toml.match(/api_key\s*=\s*"([^"]+)"/)
-        if (match) return match[1]
-    } catch { }
-
-    throw new Error(
-        `No API key found for ${provider.name}. ` +
-        (provider.name === "openai"
-            ? "Set OPENAI_API_KEY, DEEPSEEK_API_KEY, QWEN_API_KEY, DASHSCOPE_API_KEY, or pass apiKey option."
-            : provider.name === "anthropic"
-                ? "Set ANTHROPIC_API_KEY or pass apiKey option."
-                : "Set GEMINI_API_KEY, GOOGLE_API_KEY, pass apiKey option, or add .config.toml")
-    )
-}
-
-
-// ═══════════════════════════════════════════════════════════════════
-//   PUBLIC API
-// ═══════════════════════════════════════════════════════════════════
-
-/**
- * Call an LLM with a JSX-defined prompt.
- *
- * ```tsx
- * const result = await callLLM(
- *   <>
- *     <system>You are a coding agent</system>
- *     <tool name="exec" description="Run a shell command">
- *       <param name="command" type="string" required>The command to run</param>
- *     </tool>
- *     <message role="user">List the files in the current directory</message>
- *   </>,
- *   { model: "gemini-2.5-flash" }
- * )
- *
- * result.toolCalls  // [{ name: "exec", args: { command: "ls" } }]
- * ```
- */
- import { measure } from "measure-fn"
-export async function callLLM(tree: JsxAiNode, options?: CallOptions): Promise<LLMResponse> {
-    const t0 = Date.now()
-
-    // 1. Extract structured data from JSX tree
-    const prompt = extract(tree)
-
-    // 2. Apply option overrides
-    if (options?.model) prompt.model = options.model
-    if (options?.temperature != null) prompt.temperature = options.temperature
-    if (options?.maxTokens != null) prompt.maxTokens = options.maxTokens
-
-    // 3. Resolve strategy + provider
-    const strategy = resolveStrategy(prompt, options?.strategy)
-    const model = prompt.model || "gemini-2.5-flash"
-    // Use provider from options, or from prompt JSX prop, or detect from model
-    const providerOverride = options?.provider || (prompt as any).providerOverride
-    const provider = resolveProvider(model, providerOverride)
-    const apiKey = resolveApiKey(provider, options)
-
-    // 4. Strategy transforms the prompt (provider-agnostic)
-    const prepared = strategy.prepare(prompt)
-
-    // 5. Provider builds the request
-    const { url, headers, body } = provider.buildRequest(prepared, model, apiKey)
-
-    const res = await measure('fetch '+url, () => fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-    }));
-
-    if (!res.ok) {
-        const errText = await res.text()
-        console.error('[jsx-ai] Request failed:', res.status, 'URL:', url, 'Body:', JSON.stringify(body).substring(0, 300))
-        const error = `LLM API error ${res.status}: ${errText.substring(0, 500)}`
-        fireHooks({
-            id: generateId(), timestamp: t0, method: "callLLM", model,
-            provider: provider.name, strategy: strategy.name,
-            messages: prompt.messages, system: prompt.system,
-            tools: prompt.tools.map(t => t.name),
-            response: { text: '' }, durationMs: Date.now() - t0, error,
-        })
-        throw new Error(error)
-    }
-
-    const data = await res.json()
-
-    // 6. Provider normalizes the response
-    const providerResponse = provider.parseResponse(data)
-
-    // 7. Strategy parses the normalized response
-    const { text, toolCalls } = strategy.parseResponse(providerResponse)
-
-    const result: LLMResponse = {
-        text,
-        toolCalls,
-        raw: data,
-        request: { url, body },
-        usage: providerResponse.usage,
-    }
-
-    // 8. Fire hooks
-    fireHooks({
-        id: generateId(), timestamp: t0, method: "callLLM", model,
-        provider: provider.name, strategy: strategy.name,
-        messages: prompt.messages, system: prompt.system,
-        tools: prompt.tools.map(t => t.name),
-        response: { text, toolCalls },
-        usage: providerResponse.usage,
-        durationMs: Date.now() - t0,
-    })
-
-    return result
-}
-
-/**
- * Render a JSX tree to the extracted prompt data (without calling the LLM).
- * Useful for debugging/inspecting what would be sent.
- */
-export function render(tree: JsxAiNode): ExtractedPrompt {
-    return extract(tree)
-}
-
-/** Register a custom strategy */
 export function registerStrategy(name: string, strategy: RenderStrategy): void {
-    STRATEGIES[name] = strategy
+  STRATEGIES[name] = strategy;
 }
 
-/**
- * Simple text-in/text-out LLM call — no JSX needed.
- * Uses the provider system for routing and auth.
- *
- * ```ts
- * const text = await callText("gemini-2.5-flash", [
- *   { role: "system", content: "You are a planner" },
- *   { role: "user", content: "Break this task into steps" },
- * ])
- * ```
- */
-export async function callText(
-    model: string,
-    messages: Array<{ role: string; content: string }>,
-    options?: { temperature?: number; maxTokens?: number; apiKey?: string },
-): Promise<string> {
-    const t0 = Date.now()
-    const provider = resolveProvider(model, undefined)
-    const apiKey = resolveApiKey(provider, options)
+function resolveStrategy(
+  prompt: ExtractedPrompt,
+  override?: StrategyName,
+): RenderStrategy {
+  const choice = String(override || prompt.strategy || "auto");
+  if (choice === "auto") return hybrid;
+  const strategy = STRATEGIES[choice];
+  if (!strategy)
+    throw new Error(
+      `Unknown strategy: ${choice}. Available: auto, ${Object.keys(STRATEGIES).join(", ")}`,
+    );
+  return strategy;
+}
 
-    const system = messages.find(m => m.role === "system")?.content || ""
-    const nonSystem = messages.filter(m => m.role !== "system")
+function detectProvider(model: string): string {
+  if (/^(gpt-|o[0-9]|chatgpt)/i.test(model)) return "openai";
+  if (/^claude/i.test(model)) return "anthropic";
+  if (/^(deepseek|qwen)/i.test(model)) return "openai";
+  return "gemini";
+}
 
-    const prepared = {
-        system,
-        messages: nonSystem.map(m => ({
-            role: m.role as "user" | "assistant",
-            content: m.content,
-        })),
-        temperature: options?.temperature ?? 0.3,
-        maxTokens: options?.maxTokens ?? 8000,
+function resolveProvider(model: string, override?: ProviderName): Provider {
+  const name = String(override || detectProvider(model));
+  const provider = PROVIDERS[name];
+  if (!provider)
+    throw new Error(
+      `Unknown provider: ${name}. Available: ${Object.keys(PROVIDERS).join(", ")}`,
+    );
+  return provider;
+}
+
+function configApiKey(providerName: string): string | undefined {
+  try {
+    const toml = readFileSync(
+      resolvePath(process.cwd(), ".config.toml"),
+      "utf-8",
+    );
+    let section = "";
+    const acceptedSections = new Set([
+      providerName.toLowerCase(),
+      `provider.${providerName}`.toLowerCase(),
+      `providers.${providerName}`.toLowerCase(),
+    ]);
+    for (const rawLine of toml.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const sectionMatch = line.match(/^\[([^\]]+)]$/);
+      if (sectionMatch) {
+        section = sectionMatch[1].trim().toLowerCase();
+        continue;
+      }
+      if (!acceptedSections.has(section)) continue;
+      const keyMatch = line.match(/^api_key\s*=\s*["']([^"']+)["']/);
+      if (keyMatch) return keyMatch[1];
     }
+  } catch {}
+  return undefined;
+}
 
-    const { url, headers, body } = provider.buildRequest(prepared, model, apiKey)
+function resolveApiKey(provider: Provider, options?: RequestOptions): string {
+  if (options?.apiKey) return options.apiKey;
 
-    const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-    })
+  const envCandidates =
+    provider.name === "openai"
+      ? [
+          "OPENAI_API_KEY",
+          "DEEPSEEK_API_KEY",
+          "QWEN_API_KEY",
+          "DASHSCOPE_API_KEY",
+        ]
+      : provider.name === "anthropic"
+        ? ["ANTHROPIC_API_KEY"]
+        : ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
 
-    if (!res.ok) {
-        const errText = await res.text()
-        const error = `LLM API error ${res.status}: ${errText.substring(0, 500)}`
-        fireHooks({
-            id: generateId(), timestamp: t0, method: "callText", model,
-            provider: provider.name, messages, system,
-            response: { text: '' }, durationMs: Date.now() - t0, error,
-        })
-        throw new Error(error)
-    }
+  for (const name of envCandidates) {
+    const value = process.env[name];
+    if (value) return value;
+  }
+  const config = configApiKey(provider.name);
+  if (config) return config;
+  throw new Error(
+    `No API key found for ${provider.name}. Pass apiKey, set a provider-specific environment variable, or add [${provider.name}] api_key to .config.toml.`,
+  );
+}
 
-    const data = await res.json()
-    const result = provider.parseResponse(data)
+// ── Public API ──
 
+export async function callLLM(
+  tree: JsxAiNode,
+  options?: CallOptions,
+): Promise<LLMResponse> {
+  const t0 = Date.now();
+  const prompt = extract(tree);
+  if (options?.model) prompt.model = options.model;
+  if (options?.temperature != null) prompt.temperature = options.temperature;
+  if (options?.maxTokens != null) prompt.maxTokens = options.maxTokens;
+
+  const strategy = resolveStrategy(prompt, options?.strategy);
+  const model = prompt.model || "gemini-2.5-flash";
+  const provider = resolveProvider(
+    model,
+    options?.provider || prompt.providerOverride,
+  );
+  const apiKey = resolveApiKey(provider, options);
+  const prepared = strategy.prepare(prompt);
+  const { url, headers, body } = provider.buildRequest(prepared, model, apiKey);
+
+  let res: Response;
+  try {
+    res = await fetchWithRetry(
+      url,
+      { method: "POST", headers, body: JSON.stringify(body) },
+      options,
+    );
+  } catch (error: any) {
+    const message = error?.message || String(error);
     fireHooks({
-        id: generateId(), timestamp: t0, method: "callText", model,
-        provider: provider.name, messages, system,
-        response: { text: result.text },
-        usage: result.usage,
-        durationMs: Date.now() - t0,
-    })
+      id: generateId(),
+      timestamp: t0,
+      method: "callLLM",
+      model,
+      provider: provider.name,
+      strategy: strategy.name,
+      messages: prompt.messages,
+      system: prompt.system,
+      tools: prompt.tools.map((t) => t.name),
+      response: { text: "" },
+      durationMs: Date.now() - t0,
+      error: message,
+    });
+    throw error;
+  }
 
-    return result.text
+  if (!res.ok) {
+    const errText = await res.text();
+    const error = `LLM API error ${res.status}: ${errText.substring(0, 500)}`;
+    fireHooks({
+      id: generateId(),
+      timestamp: t0,
+      method: "callLLM",
+      model,
+      provider: provider.name,
+      strategy: strategy.name,
+      messages: prompt.messages,
+      system: prompt.system,
+      tools: prompt.tools.map((t) => t.name),
+      response: { text: "" },
+      durationMs: Date.now() - t0,
+      error,
+    });
+    throw new Error(error);
+  }
+
+  const data = await res.json();
+  const providerResponse = provider.parseResponse(data);
+  const { text, toolCalls } = strategy.parseResponse(providerResponse, prompt);
+  const result: LLMResponse = {
+    text,
+    toolCalls,
+    raw: data,
+    request: { url, body, prepared },
+    finishReason: providerResponse.finishReason,
+    usage: providerResponse.usage,
+  };
+
+  fireHooks({
+    id: generateId(),
+    timestamp: t0,
+    method: "callLLM",
+    model,
+    provider: provider.name,
+    strategy: strategy.name,
+    messages: prompt.messages,
+    system: prompt.system,
+    tools: prompt.tools.map((t) => t.name),
+    response: { text, toolCalls },
+    usage: providerResponse.usage,
+    durationMs: Date.now() - t0,
+  });
+  return result;
 }
 
-/**
- * Stream LLM responses token-by-token via SSE.
- * Uses the same provider routing and auth as callText/callLLM.
- *
- * ```ts
- * for await (const chunk of streamLLM("gemini-2.5-flash", [
- *   { role: "system", content: "You are helpful" },
- *   { role: "user", content: "Tell me a story" },
- * ])) {
- *   process.stdout.write(chunk)
- * }
- * ```
- */
+export function render(tree: JsxAiNode): ExtractedPrompt {
+  return extract(tree);
+}
+
+export async function callText(
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  options?: RequestOptions & {
+    provider?: ProviderName;
+    temperature?: number;
+    maxTokens?: number;
+  },
+): Promise<string> {
+  const t0 = Date.now();
+  const provider = resolveProvider(model, options?.provider);
+  const apiKey = resolveApiKey(provider, options);
+  const system = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const nonSystem: ExtractedMessage[] = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    }));
+  const prepared: PreparedPrompt = {
+    system: system || undefined,
+    messages: nonSystem,
+    temperature: options?.temperature ?? 0.3,
+    maxTokens: options?.maxTokens ?? 8000,
+  };
+  const { url, headers, body } = provider.buildRequest(prepared, model, apiKey);
+  const res = await fetchWithRetry(
+    url,
+    { method: "POST", headers, body: JSON.stringify(body) },
+    options,
+  );
+  if (!res.ok)
+    throw new Error(
+      `LLM API error ${res.status}: ${(await res.text()).substring(0, 500)}`,
+    );
+  const parsed = provider.parseResponse(await res.json());
+  fireHooks({
+    id: generateId(),
+    timestamp: t0,
+    method: "callText",
+    model,
+    provider: provider.name,
+    messages,
+    system,
+    response: { text: parsed.text },
+    usage: parsed.usage,
+    durationMs: Date.now() - t0,
+  });
+  return parsed.text;
+}
+
 export async function* streamLLM(
-    model: string,
-    messages: Array<{ role: string; content: string }>,
-    options?: { temperature?: number; maxTokens?: number; apiKey?: string },
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  options?: RequestOptions & {
+    provider?: ProviderName;
+    temperature?: number;
+    maxTokens?: number;
+  },
 ): AsyncGenerator<string> {
-    const provider = resolveProvider(model, undefined)
-    const apiKey = resolveApiKey(provider, options)
-    const temperature = options?.temperature ?? 0.3
-    const maxTokens = options?.maxTokens ?? 8000
-
-    const system = messages.find(m => m.role === "system")?.content
-    const nonSystem = messages.filter(m => m.role !== "system" && m.content?.trim())
-
-    // ── Gemini Streaming ──
-    if (provider.name === "gemini") {
-        // Merge consecutive same-role messages (Gemini rejects them)
-        const contents: Array<{ role: string; parts: Array<{ text: string }> }> = []
-        for (const m of nonSystem) {
-            const role = m.role === "assistant" ? "model" : "user"
-            const last = contents[contents.length - 1]
-            if (last && last.role === role) {
-                last.parts[0]!.text += "\n\n" + m.content
-            } else {
-                contents.push({ role, parts: [{ text: m.content }] })
-            }
-        }
-
-        const body = {
-            contents,
-            generationConfig: { temperature, maxOutputTokens: maxTokens },
-            ...(system && { systemInstruction: { parts: [{ text: system }] } }),
-        }
-
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`
-        const headers = { "Content-Type": "application/json", "x-goog-api-key": apiKey }
-
-        const res = await fetchWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, `Gemini stream ${model}`)
-        if (!res.ok) {
-            const errText = await res.text()
-            throw new Error(`Gemini stream failed (${res.status}): ${errText.substring(0, 300)}`)
-        }
-
-        yield* parseSSEStream(res, (json: any) => json.candidates?.[0]?.content?.parts?.[0]?.text || "")
-        return
-    }
-
-    // ── Anthropic Streaming ──
-    if (provider.name === "anthropic") {
-        const body = {
-            model,
-            max_tokens: maxTokens,
-            messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
-            stream: true,
-            ...(system && { system }),
-        }
-
-        const res = await fetchWithRetry(
-            "https://api.anthropic.com/v1/messages",
-            {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-                body: JSON.stringify(body),
-            },
-            `Anthropic stream ${model}`,
-        )
-        if (!res.ok) {
-            const errText = await res.text()
-            throw new Error(`Anthropic stream failed (${res.status}): ${errText.substring(0, 300)}`)
-        }
-
-        yield* parseSSEStream(res, (json: any) => {
-            if (json.type === "content_block_delta") return json.delta?.text || ""
-            return ""
-        })
-        return
-    }
-
-    // ── OpenAI-compatible Streaming (OpenAI, DeepSeek, Qwen, OpenRouter, local) ──
-    const isDeepseek = model.includes("deepseek")
-    const isQwen = model.includes("qwen")
-    const baseUrl = isDeepseek
-        ? (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com/v1").replace(/\/$/, "")
-        : isQwen
-            ? (process.env.DASHSCOPE_BASE_URL || process.env.OPENAI_API_URL || "https://coding-intl.dashscope.aliyuncs.com/v1").replace(/\/$/, "")
-            : (process.env.OPENAI_API_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "")
-
-    const isReasoning = /^o[0-9]/.test(model)
-    const body = isReasoning
-        ? { model, temperature: 1.0, messages, max_completion_tokens: maxTokens, stream: true }
-        : { model, temperature, messages, max_tokens: maxTokens, stream: true }
-
-    const res = await fetchWithRetry(
-        `${baseUrl}/chat/completions`,
-        {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify(body),
-        },
-        `OpenAI stream ${model}`,
-    )
-    if (!res.ok) {
-        const errText = await res.text()
-        throw new Error(`LLM stream failed (${res.status}): ${errText.substring(0, 300)}`)
-    }
-
-    yield* parseSSEStream(res, (json: any) => json.choices?.[0]?.delta?.content || "")
+  const provider = resolveProvider(model, options?.provider);
+  if (!provider.buildStreamRequest || !provider.parseStreamEvent) {
+    throw new Error(`Provider ${provider.name} does not implement streaming`);
+  }
+  const apiKey = resolveApiKey(provider, options);
+  const system = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const prepared: PreparedPrompt = {
+    system: system || undefined,
+    messages: messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: m.content,
+      })),
+    temperature: options?.temperature ?? 0.3,
+    maxTokens: options?.maxTokens ?? 8000,
+  };
+  const { url, headers, body } = provider.buildStreamRequest(
+    prepared,
+    model,
+    apiKey,
+  );
+  const res = await fetchWithRetry(
+    url,
+    { method: "POST", headers, body: JSON.stringify(body) },
+    options,
+  );
+  if (!res.ok)
+    throw new Error(
+      `LLM stream failed (${res.status}): ${(await res.text()).substring(0, 300)}`,
+    );
+  yield* parseSSEStream(res, provider.parseStreamEvent.bind(provider));
 }
 
+// ── Transport ──
 
-// ═══════════════════════════════════════════════════════════════════
-//   INTERNALS
-// ═══════════════════════════════════════════════════════════════════
+function retryDelayMs(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    const date = Date.parse(retryAfter);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
+  return Math.min(1000 * Math.pow(2, attempt), 10_000);
+}
 
-/** Retry fetch on transient errors (429, 500, 502, 503) with exponential backoff */
 async function fetchWithRetry(
-    url: string,
-    init: RequestInit,
-    label: string,
-    attempts = 4,
-    delayMs = 5000,
+  url: string,
+  init: RequestInit,
+  options?: RequestOptions,
 ): Promise<Response> {
-    for (let i = 0; i < attempts; i++) {
-        const res = await fetch(url, init)
-        if (res.status === 429 || res.status === 500 || res.status === 502 || res.status === 503) {
-            if (i === attempts - 1) {
-                const errText = await res.text()
-                throw new Error(`${label} failed after ${attempts} retries (${res.status}): ${errText.substring(0, 200)}`)
-            }
-            const wait = delayMs * Math.pow(2, i)
-            console.log(`[${label}] ${res.status} — retrying in ${(wait / 1000).toFixed(0)}s (attempt ${i + 1}/${attempts})`)
-            await new Promise(r => setTimeout(r, wait))
-            continue
-        }
-        return res
+  const retries = Math.max(0, options?.retries ?? 3);
+  const timeoutMs = Math.max(1, options?.timeoutMs ?? 60_000);
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const signal =
+        typeof AbortSignal.timeout === "function"
+          ? AbortSignal.timeout(timeoutMs)
+          : undefined;
+      const response = await fetch(url, {
+        ...init,
+        ...(signal ? { signal } : {}),
+      });
+      const retryable =
+        response.status === 429 ||
+        response.status === 500 ||
+        response.status === 502 ||
+        response.status === 503 ||
+        response.status === 504;
+      if (!retryable || attempt === retries) return response;
+      const delay = retryDelayMs(response, attempt);
+      try {
+        await response.body?.cancel();
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) throw error;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(1000 * Math.pow(2, attempt), 10_000)),
+      );
     }
-    throw new Error(`${label} exhausted retries`) // unreachable
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Request retries exhausted");
 }
 
-/** Generic SSE stream parser — reads data: lines and extracts text via extractor fn */
 async function* parseSSEStream(
-    res: Response,
-    extractText: (json: any) => string,
+  res: Response,
+  extractText: (json: any) => string,
 ): AsyncGenerator<string> {
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
+  if (!res.body) throw new Error("Streaming response has no body");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
 
-    while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-
-        for (const line of lines) {
-            if (!line.startsWith("data: ")) continue
-            const json = line.slice(6).trim()
-            if (!json || json === "[DONE]") continue
-            try {
-                const data = JSON.parse(json)
-                const text = extractText(data)
-                if (text) yield text
-            } catch { /* skip unparseable chunks */ }
-        }
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const text = extractText(JSON.parse(payload));
+        if (text) yield text;
+      } catch {}
     }
+  }
 }

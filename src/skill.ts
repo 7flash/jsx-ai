@@ -1,118 +1,143 @@
 // ── Skill Component ──
-//
-// Two-phase skill loading for JSX prompts:
-//
-//   Phase 1 (Discovery):  <Skill path="./skills/bun.md" />
-//     → Injects just name + description into the prompt
-//     → LLM sees a lightweight catalog of available skills
-//
-//   Phase 2 (Resolution):  <Skill path="./skills/bun.md" resolve />
-//     → Injects full skill content as system instructions
-//     → Only activated when the LLM explicitly requests it
-//
-// Combined with UseSkillTool, this creates a lazy-loading pattern:
-//   Turn 1: LLM sees catalog → calls use_skill("bun-expert")
-//   Turn 2: Requested skills are resolved → full methodology available
+// Two-phase, lazily resolved methodology files with cached parsing.
 
-import { readFileSync } from "fs"
-import { basename } from "path"
-import { jsx } from "./jsx-runtime"
-import type { JsxAiNode } from "./types"
+import { readFileSync, statSync } from "fs";
+import { basename } from "path";
+import { jsx } from "./jsx-runtime";
+import type { JsxAiNode } from "./types";
 
 export interface SkillMeta {
-    name: string
-    description: string
-    content: string
-    path: string
+  name: string;
+  description: string;
+  content: string;
+  path: string;
 }
 
-/** Parse a skill .md file with YAML frontmatter (name, description) */
+interface CacheEntry {
+  mtimeMs: number;
+  size: number;
+  value: SkillMeta;
+}
+
+const skillCache = new Map<string, CacheEntry>();
+
+function parseFrontmatterValue(
+  frontmatter: string,
+  key: string,
+): string | undefined {
+  const lines = frontmatter.split(/\r?\n/);
+  const keyRegex = new RegExp(
+    `^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*(.*)$`,
+  );
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(keyRegex);
+    if (!match) continue;
+    const raw = match[1].trim();
+    if (!/^[>|][+-]?$/.test(raw)) return raw.replace(/^['"]|['"]$/g, "");
+
+    const block: string[] = [];
+    for (i = i + 1; i < lines.length; i++) {
+      if (/^[A-Za-z0-9_-]+:\s*/.test(lines[i]) && !/^\s/.test(lines[i])) break;
+      block.push(lines[i].replace(/^\s+/, ""));
+    }
+    const value = raw.startsWith(">") ? block.join(" ") : block.join("\n");
+    return value.trim();
+  }
+  return undefined;
+}
+
+/** Parse a skill .md file with small-but-correct YAML frontmatter support. */
 export function parseSkillFile(filePath: string): SkillMeta {
-    const raw = readFileSync(filePath, "utf-8")
-    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
+  const stat = statSync(filePath);
+  const cached = skillCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size)
+    return cached.value;
 
-    if (!fmMatch) {
-        return {
-            name: basename(filePath, ".md"),
-            description: "",
-            content: raw.trim(),
-            path: filePath,
-        }
-    }
+  const raw = readFileSync(filePath, "utf-8");
+  const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  const value: SkillMeta = !fmMatch
+    ? {
+        name: basename(filePath, ".md"),
+        description: "",
+        content: raw.trim(),
+        path: filePath,
+      }
+    : {
+        name:
+          parseFrontmatterValue(fmMatch[1], "name") ||
+          basename(filePath, ".md"),
+        description: parseFrontmatterValue(fmMatch[1], "description") || "",
+        content: fmMatch[2].trim(),
+        path: filePath,
+      };
 
-    const fm = fmMatch[1]
-    const content = fmMatch[2].trim()
-    const name = fm.match(/name:\s*(.+)/)?.[1]?.trim() || basename(filePath, ".md")
-    const description = fm.match(/description:\s*(.+)/)?.[1]?.trim() || ""
-
-    return { name, description, content, path: filePath }
+  skillCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+  return value;
 }
 
-/**
- * Skill component — lazy-loads methodology from .md files.
- *
- * ```tsx
- * // Discovery mode (default) — lightweight catalog entry
- * <Skill path="./skills/bun-expert.md" />
- *
- * // Resolved mode — full content injected as system instructions
- * <Skill path="./skills/bun-expert.md" resolve />
- * ```
- */
-export function Skill({ path, resolve }: { path: string; resolve?: boolean }): JsxAiNode {
-    const skill = parseSkillFile(path)
-
-    if (resolve) {
-        return jsx("system", { children: `## Skill: ${skill.name}\n\n${skill.content}` })
-    }
-
-    // Discovery mode — just name + description for the catalog
-    return jsx("system", { children: `Available skill: ${skill.name} — ${skill.description}` })
+export function Skill({
+  path,
+  resolve,
+}: {
+  path: string;
+  resolve?: boolean;
+}): JsxAiNode {
+  const skill = parseSkillFile(path);
+  return resolve
+    ? jsx("system", { children: `## Skill: ${skill.name}\n\n${skill.content}` })
+    : jsx("system", {
+        children: `Available skill: ${skill.name} — ${skill.description}`,
+      });
 }
 
-/**
- * Tool that lets the LLM request skill activation.
- *
- * ```tsx
- * <UseSkillTool />
- * // LLM calls: use_skill({ skill_name: "bun-expert" })
- * // Next turn: <Skill path="..." resolve /> is added for the requested skill
- * ```
- */
 export function UseSkillTool(): JsxAiNode {
-    return jsx("tool", {
-        name: "use_skill",
-        description: "Activate a skill to get detailed methodology and domain-specific instructions. Call this when you need specialized knowledge for your task.",
-        children: jsx("param", {
-            name: "skill_name",
-            type: "string",
-            required: true,
-            children: "Name of the skill to activate (from the available skills list)",
-        }),
-    })
+  return jsx("tool", {
+    name: "use_skill",
+    description:
+      "Activate a skill to get detailed methodology and domain-specific instructions. Call this when you need specialized knowledge for your task.",
+    children: jsx("param", {
+      name: "skill_name",
+      type: "string",
+      required: true,
+      children: "Exact skill name from the available skills list",
+    }),
+  });
+}
+
+function normalizeSkillName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
 }
 
 /**
- * Resolve which skills to embed based on the LLM's use_skill calls.
- *
- * ```ts
- * const requested = result.toolCalls
- *   .filter(c => c.name === "use_skill")
- *   .map(c => c.args.skill_name)
- *
- * const resolved = resolveSkills(skillPaths, requested)
- * // → SkillMeta[] with full content ready to embed
- * ```
+ * Resolve exact names first. A shorthand prefix is accepted only when it identifies
+ * exactly one skill, preventing silent over-injection from bidirectional substrings.
  */
 export function resolveSkills(
-    skillPaths: string[],
-    requestedNames: string[],
+  skillPaths: string[],
+  requestedNames: string[],
 ): SkillMeta[] {
-    const all = skillPaths.map(parseSkillFile)
-    return all.filter(s =>
-        requestedNames.some(req =>
-            s.name.toLowerCase().includes(req.toLowerCase()) ||
-            req.toLowerCase().includes(s.name.toLowerCase())
-        )
-    )
+  const all = skillPaths.map(parseSkillFile);
+  const selected = new Set<string>();
+
+  for (const request of requestedNames) {
+    const wanted = normalizeSkillName(String(request || ""));
+    if (!wanted) continue;
+    const exact = all.find(
+      (skill) => normalizeSkillName(skill.name) === wanted,
+    );
+    if (exact) {
+      selected.add(exact.path);
+      continue;
+    }
+    const candidates = all.filter((skill) => {
+      const name = normalizeSkillName(skill.name);
+      return name.startsWith(`${wanted}-`) || wanted.startsWith(`${name}-`);
+    });
+    if (candidates.length === 1) selected.add(candidates[0].path);
+  }
+
+  return all.filter((skill) => selected.has(skill.path));
 }

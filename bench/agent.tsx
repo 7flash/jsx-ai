@@ -1,164 +1,152 @@
-// ── Example Agent ──
-//
-// A general-purpose coding agent built with jsx-ai.
-// This is the pattern smart-agent uses — skills as files,
-// tools as JSX components, two-phase skill loading.
-//
-// Usage:
-//   import { buildPrompt, SKILL_PATHS, summarizeTurn } from "./agent"
-//
-//   const tree = buildPrompt({
-//     messages: [{ role: "user", content: "Build a REST API" }],
-//   })
-//   const result = await callLLM(tree, { model: "gemini-2.5-flash" })
+// General-purpose coding-agent prompt components used by the benchmark/examples.
+import { Skill, UseSkillTool, resolveSkills } from "../src/index";
+import type { ExtractedMessage, LLMResponse } from "../src/types";
+import { resolve } from "path";
 
-import { Skill, UseSkillTool, resolveSkills, md } from "../src/index"
-import type { LLMResponse } from "../src/types"
-import { resolve } from "path"
-
-// ── Skills ──
-
-const SKILLS_DIR = resolve(import.meta.dir, "skills")
-
+const SKILLS_DIR = resolve(import.meta.dir, "skills");
 export const SKILL_PATHS = [
-    `${SKILLS_DIR}/agent-core.md`,
-    `${SKILLS_DIR}/bun-expert.md`,
-    `${SKILLS_DIR}/strict-typescript.md`,
-    `${SKILLS_DIR}/security.md`,
-    `${SKILLS_DIR}/test-driven.md`,
-]
-
-
-// ── Tools ──
+  `${SKILLS_DIR}/agent-core.md`,
+  `${SKILLS_DIR}/bun-expert.md`,
+  `${SKILLS_DIR}/strict-typescript.md`,
+  `${SKILLS_DIR}/security.md`,
+  `${SKILLS_DIR}/test-driven.md`,
+];
 
 export const SetObjectivesTool = () => (
-    <tool name="set_objectives" description="Define or update the current list of objectives. Call this BEFORE writing any code, and again when objectives change.">
-        <param name="objectives" type="string" required>
-            A numbered list of specific, verifiable objectives
-        </param>
-        <param name="reasoning" type="string" required>Why these objectives, and any adjustments from previous plan</param>
-    </tool>
-)
-
+  <tool
+    name="set_objectives"
+    description="Define or update the current list of objectives. Call this BEFORE writing code, and again when objectives change."
+  >
+    <param name="objectives" type="string" required>
+      A numbered list of specific, verifiable objectives
+    </param>
+    <param name="reasoning" type="string" required>
+      Why these objectives, and any adjustments from the previous plan
+    </param>
+  </tool>
+);
 export const WriteFileTool = () => (
-    <tool name="write_file" description="Write content to a file, creating directories as needed">
-        <param name="path" type="string" required>Path to write the file</param>
-        <param name="content" type="string" required>Full file content to write</param>
-    </tool>
-)
-
+  <tool
+    name="write_file"
+    description="Write content to a file, creating directories as needed"
+  >
+    <param name="path" type="string" required>
+      Path to write the file
+    </param>
+    <param name="content" type="string" required>
+      Full file content to write
+    </param>
+  </tool>
+);
 export const ExecTool = () => (
-    <tool name="exec" description="Execute a shell command and return stdout/stderr">
-        <param name="command" type="string" required>The shell command to run</param>
-    </tool>
-)
-
+  <tool
+    name="exec"
+    description="Execute a shell command and return stdout/stderr"
+  >
+    <param name="command" type="string" required>
+      The shell command to run
+    </param>
+  </tool>
+);
 export const DoneTool = () => (
-    <tool name="done" description="Signal that all objectives are complete">
-        <param name="summary" type="string" required>Summary of what was accomplished</param>
-    </tool>
-)
+  <tool name="done" description="Signal that all objectives are complete">
+    <param name="summary" type="string" required>
+      Summary of what was accomplished
+    </param>
+  </tool>
+);
 
-
-// ── Prompt Builder ──
-
-export interface AgentMessage {
-    role: "user" | "assistant"
-    content: string
-}
+export type AgentMessage = ExtractedMessage;
 
 export interface BuildPromptOptions {
-    /** Conversation messages — at minimum one user message */
-    messages: AgentMessage[]
-    /** Skill names to fully resolve (from previous use_skill calls) */
-    resolvedSkills?: string[]
-    /** Skill file paths (defaults to SKILL_PATHS) */
-    skills?: string[]
+  messages: AgentMessage[];
+  resolvedSkills?: string[];
+  skills?: string[];
 }
 
-/**
- * Build a prompt tree for any turn of the agent loop.
- *
- * The two-phase skill pattern is automatic:
- * - Skills listed in resolvedSkills get full methodology content
- * - All other skills show as lightweight catalog entries (name + description)
- * - UseSkillTool is included when no skills are resolved yet
- *
- * ```tsx
- * // Turn 1: discovery — all skills as catalog
- * buildPrompt({ messages: [{ role: "user", content: task }] })
- *
- * // Turn 2: execution — requested skills resolved
- * buildPrompt({
- *   messages: [...history],
- *   resolvedSkills: ["bun-expert", "strict-typescript"],
- * })
- * ```
- */
 export function buildPrompt(opts: BuildPromptOptions) {
-    const skillPaths = opts.skills || SKILL_PATHS
-    const resolved = opts.resolvedSkills
-        ? resolveSkills(skillPaths, opts.resolvedSkills)
-        : []
-    const resolvedPaths = new Set(resolved.map(s => s.path))
-    const hasResolvedSkills = resolved.length > 0
+  const skillPaths = opts.skills || SKILL_PATHS;
+  const resolved = resolveSkills(skillPaths, opts.resolvedSkills || []);
+  const resolvedPaths = new Set(resolved.map((s) => s.path));
+  const hasUnresolvedSkills = resolvedPaths.size < skillPaths.length;
 
-    return <>
-        {/* Two-phase skills: resolved get full content, others stay as catalog */}
-        {skillPaths.map(p =>
-            <Skill path={p} resolve={resolvedPaths.has(p)} />
-        )}
-
-        {/* Tools — UseSkillTool only when still discovering */}
-        {!hasResolvedSkills && <UseSkillTool />}
-        <SetObjectivesTool />
-        <WriteFileTool />
-        <ExecTool />
-        <DoneTool />
-
-        {/* Conversation */}
-        {opts.messages.map(m =>
-            <message role={m.role}>{m.content}</message>
-        )}
+  return (
+    <>
+      {skillPaths.map((path) => (
+        <Skill path={path} resolve={resolvedPaths.has(path)} />
+      ))}
+      {hasUnresolvedSkills && <UseSkillTool />}
+      <SetObjectivesTool />
+      <WriteFileTool />
+      <ExecTool />
+      <DoneTool />
+      {opts.messages.map((m) => (
+        <message
+          role={m.role}
+          toolCalls={m.toolCalls}
+          toolCallId={m.toolCallId}
+          toolName={m.toolName}
+          isError={m.isError}
+        >
+          {m.content}
+        </message>
+      ))}
     </>
+  );
 }
 
+/** Canonical assistant history: preserves full tool arguments for every strategy. */
+export function resultToAssistantMessage(result: LLMResponse): AgentMessage {
+  return {
+    role: "assistant",
+    content: result.text || "",
+    toolCalls: result.toolCalls,
+  };
+}
 
-// ── Turn Utilities ──
-
-/** Summarize a turn's output for conversation history */
-export function summarizeTurn(result: LLMResponse): string {
-    const parts: string[] = []
-    if (result.text) parts.push(result.text)
-    for (const tc of result.toolCalls) {
-        switch (tc.name) {
-            case "set_objectives":
-                parts.push(`[Called set_objectives]\n${tc.args.objectives || ""}`)
-                break
-            case "use_skill":
-                parts.push(`[Called use_skill: ${tc.args.skill_name}]`)
-                break
-            case "write_file": {
-                const preview = (tc.args.content || "").substring(0, 200)
-                parts.push(`[Called write_file: ${tc.args.path}]\n${preview}...`)
-                break
-            }
-            case "exec":
-                parts.push(`[Called exec: ${tc.args.command}]`)
-                break
-            case "done":
-                parts.push(`[Called done: ${tc.args.summary}]`)
-                break
-            default:
-                parts.push(`[Called ${tc.name}(${JSON.stringify(tc.args).substring(0, 200)})]`)
-        }
+/** Simulated tool execution results paired with the original tool-call IDs/names. */
+export function resultToToolMessages(result: LLMResponse): AgentMessage[] {
+  return result.toolCalls.map((call) => {
+    let content: string;
+    switch (call.name) {
+      case "use_skill":
+        content = `Skill activation accepted: ${call.args.skill_name || "unknown"}`;
+        break;
+      case "set_objectives":
+        content = "Objectives accepted.";
+        break;
+      case "write_file":
+        content = `File written successfully: ${call.args.path || "unknown"}`;
+        break;
+      case "exec":
+        content = "Command completed successfully in the benchmark simulation.";
+        break;
+      case "done":
+        content = "Completion signal recorded.";
+        break;
+      default:
+        content = "Tool call completed successfully.";
     }
-    return parts.join("\n\n")
+    return {
+      role: "tool" as const,
+      content,
+      toolCallId: call.id,
+      toolName: call.name,
+    };
+  });
 }
 
-/** Extract skill names requested via use_skill tool calls */
+/** Human-readable logging helper only; do not use it to construct model history. */
+export function summarizeTurn(result: LLMResponse): string {
+  const parts = [result.text].filter(Boolean);
+  for (const call of result.toolCalls)
+    parts.push(`[${call.name}] ${JSON.stringify(call.args)}`);
+  return parts.join("\n\n");
+}
+
 export function extractRequestedSkills(result: LLMResponse): string[] {
-    return result.toolCalls
-        .filter(c => c.name === "use_skill")
-        .map(c => c.args.skill_name as string)
+  return result.toolCalls
+    .filter((call) => call.name === "use_skill")
+    .map((call) => String(call.args.skill_name || "").trim())
+    .filter(Boolean);
 }

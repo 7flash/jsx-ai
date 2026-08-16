@@ -1,156 +1,187 @@
 // ── JSX-AI Node Types ──
-// The virtual tree produced by JSX before rendering to an API request
+// The virtual tree produced by JSX before rendering to an API request.
+
+export type BuiltinProviderName = "gemini" | "openai" | "anthropic";
+export type ProviderName = BuiltinProviderName | (string & {});
+export type BuiltinStrategyName =
+  "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto";
+export type StrategyName = BuiltinStrategyName | (string & {});
+
+export interface ToolCall {
+  /** Provider tool-call identifier when the protocol supplies one. */
+  id?: string;
+  name: string;
+  args: Record<string, any>;
+}
 
 export type JsxAiNode =
-    | ToolNode
-    | ParamNode
-    | MessageNode
-    | SystemNode
-    | PromptNode
-    | TextNode
-    | FragmentNode
+  | ToolNode
+  | ParamNode
+  | MessageNode
+  | SystemNode
+  | PromptNode
+  | TextNode
+  | FragmentNode;
 
 export interface ToolNode {
-    type: "tool"
-    props: {
-        name: string
-        description: string
-        children?: JsxAiNode | JsxAiNode[]
-    }
+  type: "tool";
+  props: {
+    name: string;
+    description: string;
+    children?: JsxAiNode | JsxAiNode[];
+  };
 }
 
 export interface ParamNode {
-    type: "param"
-    props: {
-        name: string
-        type?: string
-        required?: boolean
-        enum?: string[]
-        children?: string  // description text
-    }
+  type: "param";
+  props: {
+    name: string;
+    type?: string;
+    required?: boolean;
+    enum?: string[];
+    children?: string;
+  };
 }
 
+/**
+ * A message can preserve native tool history instead of flattening it to prose.
+ *
+ * Assistant tool call:
+ *   <message role="assistant" toolCalls={result.toolCalls}>{result.text}</message>
+ *
+ * Tool result:
+ *   <message role="tool" toolCallId={call.id} toolName={call.name}>ok</message>
+ */
 export interface MessageNode {
-    type: "message"
-    props: {
-        role: "user" | "assistant" | "tool"
-        children?: JsxAiNode | JsxAiNode[] | string
-    }
+  type: "message";
+  props: {
+    role: "user" | "assistant" | "tool";
+    toolCalls?: ToolCall[];
+    toolCallId?: string;
+    toolName?: string;
+    isError?: boolean;
+    children?: JsxAiNode | JsxAiNode[] | string;
+  };
 }
 
 export interface SystemNode {
-    type: "system"
-    props: {
-        children?: JsxAiNode | JsxAiNode[] | string
-    }
+  type: "system";
+  props: {
+    children?: JsxAiNode | JsxAiNode[] | string;
+  };
 }
 
 export interface PromptNode {
-    type: "prompt"
-    props: {
-        model?: string
-        temperature?: number
-        maxTokens?: number
-        strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
-        children?: JsxAiNode | JsxAiNode[]
-    }
+  type: "prompt";
+  props: {
+    model?: string;
+    provider?: ProviderName;
+    temperature?: number;
+    maxTokens?: number;
+    strategy?: StrategyName;
+    children?: JsxAiNode | JsxAiNode[];
+  };
 }
 
 export interface TextNode {
-    type: "text"
-    value: string
+  type: "text";
+  value: string;
 }
 
 export interface FragmentNode {
-    type: "fragment"
-    children: JsxAiNode[]
+  type: "fragment";
+  children: JsxAiNode[];
 }
 
-// ── Extracted structured data from the tree ──
+// ── Canonical prompt IR ──
 
 export interface ExtractedTool {
-    name: string
-    description: string
-    parameters: {
-        type: "object"
-        properties: Record<string, {
-            type: string
-            description: string
-            enum?: string[]
-        }>
-        required: string[]
-    }
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<
+      string,
+      {
+        type: string;
+        description: string;
+        enum?: string[];
+      }
+    >;
+    required: string[];
+  };
 }
 
 export interface ExtractedMessage {
-    role: "user" | "assistant" | "system" | "tool"
-    content: string
+  role: "user" | "assistant" | "tool";
+  content: string;
+  /** Present on assistant messages that requested tools. */
+  toolCalls?: ToolCall[];
+  /** Present on tool result messages. Required by OpenAI/Anthropic native history. */
+  toolCallId?: string;
+  /** Tool name for tool results. Required by Gemini functionResponse history. */
+  toolName?: string;
+  isError?: boolean;
 }
 
 export interface ExtractedPrompt {
-    tools: ExtractedTool[]
-    messages: ExtractedMessage[]
-    system?: string
-    model?: string
-    temperature?: number
-    maxTokens?: number
-    strategy?: "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto"
+  tools: ExtractedTool[];
+  messages: ExtractedMessage[];
+  system?: string;
+  model?: string;
+  providerOverride?: ProviderName;
+  temperature?: number;
+  maxTokens?: number;
+  strategy?: StrategyName;
 }
 
 // ── Provider-agnostic prepared prompt ──
-// This is what a strategy produces — no Gemini/OpenAI specifics.
 
 export interface PreparedPrompt {
-    system?: string
-    messages: { role: "user" | "assistant"; content: string }[]
-    /** Structured tool declarations for native FC strategies (native, hybrid) */
-    nativeTools?: ExtractedTool[]
-    temperature?: number
-    maxTokens?: number
+  system?: string;
+  messages: ExtractedMessage[];
+  /** Structured tool declarations for native FC strategies (native, hybrid). */
+  nativeTools?: ExtractedTool[];
+  temperature?: number;
+  maxTokens?: number;
 }
 
 // ── LLM response types ──
 
-export interface ToolCall {
-    name: string
-    args: Record<string, any>
-}
-
-/** Provider-normalized response — what the provider hands to the strategy */
 export interface ProviderResponse {
-    /** All text content from the response */
-    text: string
-    /** Tool calls extracted by the provider's native FC mechanism (if any) */
-    nativeToolCalls: ToolCall[]
-    /** Raw API response for logging/debugging */
-    raw: any
-    usage?: {
-        inputTokens: number
-        outputTokens: number
-        thinkingTokens?: number
-    }
+  text: string;
+  nativeToolCalls: ToolCall[];
+  raw: any;
+  finishReason?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    thinkingTokens?: number;
+  };
 }
 
 export interface LLMResponse {
-    text: string
-    toolCalls: ToolCall[]
-    raw: any
-    request?: { url: string; body: any }
-    usage?: {
-        inputTokens: number
-        outputTokens: number
-        thinkingTokens?: number
-    }
+  text: string;
+  toolCalls: ToolCall[];
+  raw: any;
+  /** Canonical request data is included so logs do not need provider-specific introspection. */
+  request?: { url: string; body: any; prepared: PreparedPrompt };
+  finishReason?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    thinkingTokens?: number;
+  };
 }
 
 // ── Strategy interface ──
-// Strategies are PROVIDER-AGNOSTIC. They transform the prompt shape
-// and parse the response — but never build API-specific bodies.
 
 export interface RenderStrategy {
-    name: string
-    /** Transform extracted prompt into provider-agnostic prepared prompt */
-    prepare(prompt: ExtractedPrompt): PreparedPrompt
-    /** Parse the normalized provider response into text + tool calls */
-    parseResponse(response: ProviderResponse): { text: string; toolCalls: ToolCall[] }
+  name: string;
+  prepare(prompt: ExtractedPrompt): PreparedPrompt;
+  /** The canonical prompt is supplied for parsers that need declared tool metadata. */
+  parseResponse(
+    response: ProviderResponse,
+    prompt?: ExtractedPrompt,
+  ): { text: string; toolCalls: ToolCall[] };
 }

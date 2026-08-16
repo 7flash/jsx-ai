@@ -1,140 +1,135 @@
-// ── XML Strategy ──
-// Everything is XML: system prompt, tools, messages — the entire prompt is one XML document.
-// The model responds with XML that we parse.
-// This gives the LLM maximum structure to work with.
+import type {
+  ExtractedMessage,
+  ExtractedPrompt,
+  RenderStrategy,
+  ToolCall,
+} from "../types";
 
-import type { RenderStrategy, ExtractedPrompt, PreparedPrompt, ProviderResponse, ToolCall } from "../types"
-
-/** Build the full XML prompt document — system, tools, and conversation */
-function buildXMLDocument(prompt: ExtractedPrompt): string {
-    const parts: string[] = []
-
-    parts.push(`<prompt>`)
-
-    // System instruction
-    if (prompt.system) {
-        parts.push(`  <system>${prompt.system}</system>`)
-    }
-
-    // Tools
-    if (prompt.tools.length > 0) {
-        parts.push(`  <tools>`)
-        for (const t of prompt.tools) {
-            parts.push(`    <tool name="${t.name}" description="${escapeXml(t.description)}">`)
-            for (const [name, p] of Object.entries(t.parameters.properties)) {
-                const req = t.parameters.required.includes(name) ? ` required="true"` : ``
-                const enumAttr = p.enum ? ` enum="${p.enum.join(',')}"` : ``
-                parts.push(`      <param name="${name}" type="${p.type}"${req}${enumAttr}>${escapeXml(p.description)}</param>`)
-            }
-            parts.push(`    </tool>`)
-        }
-        parts.push(`  </tools>`)
-    }
-
-    // Conversation messages
-    if (prompt.messages.length > 0) {
-        parts.push(`  <messages>`)
-        for (const m of prompt.messages) {
-            parts.push(`    <message role="${m.role}">${escapeXml(m.content)}</message>`)
-        }
-        parts.push(`  </messages>`)
-    }
-
-    // Response format instruction
-    parts.push(`  <response_format>`)
-    parts.push(`    Respond ONLY with valid XML in this format:`)
-    parts.push(`    <response>`)
-    parts.push(`      <message>Your reasoning and explanation</message>`)
-    parts.push(`      <tool_calls>`)
-    parts.push(`        <call tool="tool_name">`)
-    parts.push(`          <param name="param_name">value</param>`)
-    parts.push(`        </call>`)
-    parts.push(`      </tool_calls>`)
-    parts.push(`    </response>`)
-    parts.push(`  </response_format>`)
-
-    parts.push(`</prompt>`)
-
-    return parts.join("\n")
+export function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
-/** Escape XML special characters */
-function escapeXml(text: string): string {
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
+export function unescapeXml(text: string): string {
+  return text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
-/** Parse tool calls from XML text */
-function parseXMLToolCalls(text: string): ToolCall[] {
-    const calls: ToolCall[] = []
+function messageXml(message: ExtractedMessage): string {
+  const attrs = [
+    `role="${escapeXml(message.role)}"`,
+    message.toolCallId ? `tool_call_id="${escapeXml(message.toolCallId)}"` : "",
+    message.toolName ? `tool_name="${escapeXml(message.toolName)}"` : "",
+    message.isError ? `is_error="true"` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const parts = [escapeXml(message.content)];
+  for (const call of message.toolCalls || []) {
+    const id = call.id ? ` id="${escapeXml(call.id)}"` : "";
+    parts.push(
+      `<tool_call name="${escapeXml(call.name)}"${id}><args>${escapeXml(JSON.stringify(call.args))}</args></tool_call>`,
+    );
+  }
+  return `    <message ${attrs}>${parts.join("")}</message>`;
+}
 
-    // Match <call tool="name">...</call> blocks
-    const callRegex = /<call\s+tool="([^"]+)">([\s\S]*?)<\/call>/g
-    let match
-    while ((match = callRegex.exec(text)) !== null) {
-        const toolName = match[1].trim()
-        const body = match[2]
-        const args: Record<string, any> = {}
+export function buildXMLDocument(prompt: ExtractedPrompt): string {
+  const parts: string[] = ["<prompt>"];
+  if (prompt.system)
+    parts.push(`  <system>${escapeXml(prompt.system)}</system>`);
 
-        const paramRegex = /<param\s+name="([^"]+)">([\s\S]*?)<\/param>/g
-        let pm
-        while ((pm = paramRegex.exec(body)) !== null) {
-            args[pm[1].trim()] = pm[2].trim()
-        }
-        calls.push({ name: toolName, args })
+  if (prompt.tools.length) {
+    parts.push("  <tools>");
+    for (const tool of prompt.tools) {
+      parts.push(
+        `    <tool name="${escapeXml(tool.name)}" description="${escapeXml(tool.description)}">`,
+      );
+      for (const [name, p] of Object.entries(tool.parameters.properties)) {
+        const required = tool.parameters.required.includes(name)
+          ? ` required="true"`
+          : "";
+        const enumAttr = p.enum?.length
+          ? ` enum="${escapeXml(p.enum.join(","))}"`
+          : "";
+        parts.push(
+          `      <param name="${escapeXml(name)}" type="${escapeXml(p.type)}"${required}${enumAttr}>${escapeXml(p.description)}</param>`,
+        );
+      }
+      parts.push("    </tool>");
     }
+    parts.push("  </tools>");
+  }
 
-    // Fallback: legacy <invocation> format
-    if (calls.length === 0) {
-        const invocationRegex = /<invocation>([\s\S]*?)<\/invocation>/g
-        while ((match = invocationRegex.exec(text)) !== null) {
-            const block = match[1]
-            const toolMatch = block.match(/<tool>([\s\S]*?)<\/tool>/)
-            const paramsMatch = block.match(/<params>([\s\S]*?)<\/params>/)
+  if (prompt.messages.length) {
+    parts.push("  <messages>");
+    for (const message of prompt.messages) parts.push(messageXml(message));
+    parts.push("  </messages>");
+  }
 
-            if (toolMatch) {
-                const args: Record<string, any> = {}
-                if (paramsMatch) {
-                    const paramRegex = /<(\w+)>([\s\S]*?)<\/\1>/g
-                    let pm
-                    while ((pm = paramRegex.exec(paramsMatch[1])) !== null) {
-                        args[pm[1]] = pm[2].trim()
-                    }
-                }
-                calls.push({ name: toolMatch[1].trim(), args })
-            }
-        }
-    }
+  parts.push(
+    "  <response_format>",
+    "    Respond only with a response XML document. Put arbitrary parameter text inside CDATA:",
+    "    <response>",
+    "      <message>Concise explanation</message>",
+    "      <tool_calls>",
+    '        <call tool="tool_name"><param name="param_name"><![CDATA[value]]></param></call>',
+    "      </tool_calls>",
+    "    </response>",
+    "  </response_format>",
+    "</prompt>",
+  );
+  return parts.join("\n");
+}
 
-    return calls
+function decodeParam(raw: string): string {
+  const trimmed = raw.trim();
+  const cdata = trimmed.match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
+  return cdata ? cdata[1] : unescapeXml(trimmed);
+}
+
+export function parseXMLToolCalls(text: string): ToolCall[] {
+  const calls: ToolCall[] = [];
+  const callRegex =
+    /<call\s+tool="([^"]+)"(?:\s+id="([^"]+)")?\s*>([\s\S]*?)<\/call>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = callRegex.exec(text)) !== null) {
+    const args: Record<string, any> = {};
+    const paramRegex = /<param\s+name="([^"]+)"\s*>([\s\S]*?)<\/param>/gi;
+    let pm: RegExpExecArray | null;
+    while ((pm = paramRegex.exec(match[3])) !== null)
+      args[unescapeXml(pm[1])] = decodeParam(pm[2]);
+    calls.push({
+      ...(match[2] ? { id: unescapeXml(match[2]) } : {}),
+      name: unescapeXml(match[1]),
+      args,
+    });
+  }
+  return calls;
 }
 
 export const xml: RenderStrategy = {
-    name: "xml",
-
-    prepare(prompt: ExtractedPrompt): PreparedPrompt {
-        const xmlDocument = buildXMLDocument(prompt)
-
-        return {
-            messages: [{ role: "user", content: xmlDocument }],
-            temperature: prompt.temperature,
-            maxTokens: prompt.maxTokens,
-        }
-    },
-
-    parseResponse(response: ProviderResponse) {
-        const text = response.text
-
-        // Extract message from <message> tag
-        const msgMatch = text.match(/<message>([\s\S]*?)<\/message>/)
-        const message = msgMatch ? msgMatch[1].trim() : text.replace(/<[^>]+>/g, "").trim()
-
-        return {
-            text: message,
-            toolCalls: parseXMLToolCalls(text),
-        }
-    },
-}
+  name: "xml",
+  prepare(prompt) {
+    return {
+      messages: [{ role: "user", content: buildXMLDocument(prompt) }],
+      temperature: prompt.temperature,
+      maxTokens: prompt.maxTokens,
+    };
+  },
+  parseResponse(response) {
+    const match = response.text.match(/<message>([\s\S]*?)<\/message>/i);
+    const message = match
+      ? unescapeXml(match[1].replace(/<[^>]+>/g, "").trim())
+      : unescapeXml(response.text.replace(/<[^>]+>/g, "").trim());
+    return { text: message, toolCalls: parseXMLToolCalls(response.text) };
+  },
+};

@@ -1,448 +1,602 @@
 #!/usr/bin/env bun
-// ── jsx-ai Agentic Benchmark ──
-//
-// Imports the example agent and tests it across strategies and models
-// with a set of complex multi-turn scenarios.
-//
-// The benchmark orchestrates the 3-turn agentic loop:
-//   Turn 1 (Discover): Agent sees skill catalog → calls use_skill + set_objectives
-//   Turn 2 (Execute):  Requested skills resolved → agent writes code
-//   Turn 3 (Adapt):    Simulated failure → agent fixes and completes
-//
-// Run: bgrun jsx-bench --restart
+// Agent protocol benchmark. This is deliberately a fixed-turn protocol test,
+// not a claim about end-to-end autonomous-agent success.
 
-import { measure, configure } from "measure-fn"
-import { callLLM, md } from "../src/index"
-import type { LLMResponse, CallOptions } from "../src/index"
-import { buildPrompt, summarizeTurn, extractRequestedSkills } from "./agent"
-import { mkdirSync } from "fs"
+import { mkdirSync, writeFileSync } from "fs";
+import { callLLM, md } from "../src/index";
+import type { LLMResponse, CallOptions } from "../src/index";
+import {
+  buildPrompt,
+  extractRequestedSkills,
+  resultToAssistantMessage,
+  resultToToolMessages,
+} from "./agent";
 
-const MODEL = process.env.BENCH_MODEL || "gemini-2.5-flash"
-const ITERATIONS = parseInt(process.env.BENCH_ITERATIONS || "2")
-const STRATEGY_NAMES = ["native", "nlt", "natural"] as const
-type StrategyName = (typeof STRATEGY_NAMES)[number]
+const MODEL = process.env.BENCH_MODEL || "gemini-2.5-flash";
+const ITERATIONS = parseInt(process.env.BENCH_ITERATIONS || "5");
+const MAX_TOKENS = parseInt(process.env.BENCH_MAX_TOKENS || "24000");
+const STRATEGY_NAMES = ["native", "nlt", "natural"] as const;
+type StrategyName = (typeof STRATEGY_NAMES)[number];
 
-
-// ═══════════════════════════════════════════════════════════════════
-//   SCENARIO
-//
-//   A scenario defines one complex task for the agent to solve.
-//   It includes the user request, simulated tool results between
-//   turns, and scoring functions for each turn.
-// ═══════════════════════════════════════════════════════════════════
-
-interface Scenario {
-    name: string
-    /** The user's initial request */
-    task: string
-    /** Injected after turn 1 (simulated tool results + discoveries) */
-    turn2Injection: string
-    /** Injected after turn 2 (simulated test output + issues) */
-    turn3Injection: string
-    /** Score each turn */
-    scoreTurn1(result: LLMResponse): TurnScore
-    scoreTurn2(result: LLMResponse): TurnScore
-    scoreTurn3(result: LLMResponse): TurnScore
-}
+type TurnStatus = "ok" | "truncated" | "error";
 
 interface TurnScore {
-    turn: number
-    checks: Record<string, boolean>
-    score: number
-    maxScore: number
-    details: string
+  turn: number;
+  checks: Record<string, boolean>;
+  score: number;
+  maxScore: number;
+  details: string;
+}
+
+interface Scenario {
+  name: string;
+  task: string;
+  turn2Injection: string;
+  turn3Injection: string;
+  scoreTurn1(result: LLMResponse): TurnScore;
+  scoreTurn2(result: LLMResponse): TurnScore;
+  scoreTurn3(result: LLMResponse): TurnScore;
 }
 
 function computeScore(
-    turn: number,
-    checks: Record<string, boolean>,
-    weights: Record<string, number>,
+  turn: number,
+  checks: Record<string, boolean>,
+  weights: Record<string, number>,
 ): TurnScore {
-    let points = 0, max = 0
-    const details: string[] = []
-    for (const [name, passed] of Object.entries(checks)) {
-        const w = weights[name] || 3
-        max += w
-        if (passed) points += w
-        details.push(`${passed ? "✓" : "✗"} ${name}`)
-    }
-    return {
-        turn, checks,
-        score: max > 0 ? Math.round(points / max * 100) : 0,
-        maxScore: max,
-        details: details.join(", "),
-    }
+  let points = 0,
+    max = 0;
+  const details: string[] = [];
+  for (const [name, passed] of Object.entries(checks)) {
+    const weight = weights[name] || 3;
+    max += weight;
+    if (passed) points += weight;
+    details.push(`${passed ? "✓" : "✗"} ${name}`);
+  }
+  return {
+    turn,
+    checks,
+    score: max ? Math.round((points / max) * 100) : 0,
+    maxScore: max,
+    details: details.join(", "),
+  };
 }
 
-
-// ═══════════════════════════════════════════════════════════════════
-//   KV STORE SCENARIO
-// ═══════════════════════════════════════════════════════════════════
+function codeFrom(result: LLMResponse): string[] {
+  return result.toolCalls
+    .filter((call) => call.name === "write_file")
+    .map((call) => String(call.args.content || ""))
+    .filter(Boolean);
+}
 
 const kvStoreScenario: Scenario = {
-    name: "kv-store",
+  name: "kv-store",
+  task: md`
+    Build a key-value store API with TTL (time-to-live) expiration.
 
-    task: md`
-        Build a key-value store API with TTL (time-to-live) expiration.
+    Requirements:
 
-        Requirements:
-        - POST /kv/:key — set a value (body: { value, ttl_seconds? })
-        - GET /kv/:key — get a value (404 if expired or missing)
-        - DELETE /kv/:key — delete a key
-        - GET /kv — list all non-expired keys
-        - Expired keys should be cleaned up automatically
+    - POST /kv/:key — set a value (body: { value, ttl_seconds? })
+    - GET /kv/:key — get a value (404 if expired or missing)
+    - DELETE /kv/:key — delete a key
+    - GET /kv — list all non-expired keys
+    - Expired keys should be cleaned up automatically
 
-        Use Bun + SQLite for persistence. TypeScript strict mode.
-    `,
+    Use Bun + SQLite for persistence. TypeScript strict mode.
+  `,
+  turn2Injection: md`
+    Objectives accepted. Skills activated.
 
-    turn2Injection: md`
-        Objectives accepted. Skills activated.
+    Environment results:
+    package.json = { "name": "kv-store", "version": "1.0.0", "type": "module" }
+    src/ is empty.
 
-        I ran \`cat package.json\` and found:
-        \`\`\`json
-        { "name": "kv-store", "version": "1.0.0", "type": "module" }
-        \`\`\`
+    Implement the objectives now. Write the necessary files with write_file.
+    Independent writes may be emitted in one turn.
+  `,
+  turn3Injection: md`
+    The files were written and I ran bun test:
 
-        \`ls src/\` — the directory is empty.
+    src/server.test.ts:
+    ✓ POST /kv/:key sets a value
+    ✓ GET /kv/:key retrieves a value
+    ✓ GET /kv/:key returns 404 for missing key
+    ✗ GET /kv/:key returns 404 for expired key
+    Expected: 404
+    Received: 200
+    ✓ DELETE /kv/:key removes a key
+    ✓ GET /kv lists all keys
 
-        Now implement your objectives. Write all files using write_file.
-        You can make multiple tool calls in a single turn.
-    `,
+    5 pass, 1 fail
 
-    turn3Injection: md`
-        Files written. I ran \`bun test\` and got:
+    Expired keys still return 200. Fix the expiration bug, update objectives, then call done.
+  `,
 
-        \`\`\`
-        src/server.test.ts:
-        ✓ POST /kv/:key sets a value
-        ✓ GET /kv/:key retrieves a value
-        ✓ GET /kv/:key returns 404 for missing key
-        ✗ GET /kv/:key returns 404 for expired key
-            Expected: 404
-            Received: 200
-            at src/server.test.ts:42:20
-        ✓ DELETE /kv/:key removes a key
-        ✓ GET /kv lists all keys
+  scoreTurn1(result) {
+    const calls = result.toolCalls;
+    const objectives = calls.find((call) => call.name === "set_objectives");
+    const skillCalls = calls.filter((call) => call.name === "use_skill");
+    const text = String(objectives?.args.objectives || "");
+    return computeScore(
+      1,
+      {
+        called_use_skill: skillCalls.length > 0,
+        "requested_2+_skills": skillCalls.length >= 2,
+        requested_bun: skillCalls.some((call) =>
+          /bun/i.test(String(call.args.skill_name || "")),
+        ),
+        called_set_objectives: !!objectives,
+        has_reasoning: String(objectives?.args.reasoning || "").length > 20,
+        "3+_objectives": (text.match(/^\d+\./gm) || []).length >= 3,
+        mentions_ttl: /ttl|expir/i.test(text),
+        // Negative checks only score if the model actually produced a protocol action.
+        no_premature_write:
+          calls.length > 0 && !calls.some((call) => call.name === "write_file"),
+      },
+      {
+        called_use_skill: 10,
+        "requested_2+_skills": 6,
+        requested_bun: 5,
+        called_set_objectives: 15,
+        has_reasoning: 5,
+        "3+_objectives": 8,
+        mentions_ttl: 6,
+        no_premature_write: 8,
+      },
+    );
+  },
 
-        5 pass, 1 fail
-        \`\`\`
+  scoreTurn2(result) {
+    const writes = result.toolCalls.filter(
+      (call) => call.name === "write_file",
+    );
+    const code = codeFrom(result);
+    const allCode = code.join("\n");
+    const dbCode = code
+      .filter((source) => /bun:sqlite|\bDatabase\b|\.prepare\(/.test(source))
+      .join("\n");
+    const serverCode = code
+      .filter((source) => /Bun\.serve|\/kv(?:\b|\/)/.test(source))
+      .join("\n");
+    const testCode = code
+      .filter((source) => /bun:test|\b(?:it|test)\s*\(/.test(source))
+      .join("\n");
 
-        The TTL expiration check is not working — expired keys still return
-        200 instead of 404. Fix this bug and update your objectives. Then call done.
-    `,
+    return computeScore(
+      2,
+      {
+        "writes_3+_files": writes.length >= 3,
+        creates_db: dbCode.length > 0,
+        creates_server: serverCode.length > 0,
+        creates_tests: testCode.length > 0,
+        uses_bun_sqlite: /bun:sqlite/.test(dbCode),
+        uses_bun_serve: /Bun\.serve|export\s+default/.test(serverCode),
+        uses_bun_test: /bun:test/.test(testCode),
+        imports_types: /from\s*["']\.\/(types)/.test(allCode),
+        uses_prepared_stmt: /\.prepare\(/.test(dbCode),
+        has_ttl_logic: /ttl|expir|created_at/i.test(allCode),
+        has_kv_endpoints: /\/kv/.test(serverCode),
+        "has_5+_tests": (testCode.match(/(?:it|test)\s*\(/g) || []).length >= 5,
+        no_any: allCode.length > 0 && !/:\s*any\b/.test(allCode),
+      },
+      {
+        "writes_3+_files": 10,
+        creates_db: 8,
+        creates_server: 8,
+        creates_tests: 8,
+        uses_bun_sqlite: 5,
+        uses_bun_serve: 4,
+        uses_bun_test: 3,
+        imports_types: 5,
+        uses_prepared_stmt: 5,
+        has_ttl_logic: 6,
+        has_kv_endpoints: 4,
+        "has_5+_tests": 5,
+        no_any: 4,
+      },
+    );
+  },
 
-    scoreTurn1(result) {
-        const calls = result.toolCalls
-        const objectives = calls.find(c => c.name === "set_objectives")
-        const skillCalls = calls.filter(c => c.name === "use_skill")
-        const objText = objectives?.args.objectives || ""
+  scoreTurn3(result) {
+    const writes = result.toolCalls.filter(
+      (call) => call.name === "write_file",
+    );
+    const fixCode = codeFrom(result).join("\n");
+    const done = result.toolCalls.find((call) => call.name === "done");
+    const directEvidence = `${result.text}\n${fixCode}`;
+    return computeScore(
+      3,
+      {
+        addresses_ttl_bug: /ttl|expir|expired|Date\.now|created_at|404/i.test(
+          directEvidence,
+        ),
+        writes_fix: writes.length > 0,
+        // Content-based: file naming is not part of the task contract.
+        fix_touches_runtime: /bun:sqlite|Bun\.serve|\/kv|ttl|expir/i.test(
+          fixCode,
+        ),
+        updates_objectives: result.toolCalls.some(
+          (call) => call.name === "set_objectives",
+        ),
+        fix_has_expiry_check:
+          /Date\.now|created_at\s*\+|expires?_at|WHERE[\s\S]*expir|ttl[\s\S]*(?:<=|<|>)/i.test(
+            fixCode,
+          ),
+        calls_done: !!done,
+        done_has_summary: String(done?.args.summary || "").length > 10,
+      },
+      {
+        addresses_ttl_bug: 10,
+        writes_fix: 10,
+        fix_touches_runtime: 8,
+        updates_objectives: 8,
+        fix_has_expiry_check: 10,
+        calls_done: 6,
+        done_has_summary: 3,
+      },
+    );
+  },
+};
 
-        return computeScore(1, {
-            "called_use_skill": skillCalls.length > 0,
-            "requested_2+_skills": skillCalls.length >= 2,
-            "requested_bun": skillCalls.some(c => /bun/i.test(c.args.skill_name || "")),
-            "called_set_objectives": !!objectives,
-            "has_reasoning": (objectives?.args.reasoning || "").length > 20,
-            "3+_objectives": (objText.match(/^\d+\./gm) || []).length >= 3,
-            "mentions_ttl": /ttl|expir/i.test(objText),
-            "no_premature_write": !calls.some(c => c.name === "write_file"),
-        }, {
-            called_use_skill: 10,
-            "requested_2+_skills": 6,
-            requested_bun: 5,
-            called_set_objectives: 15,
-            has_reasoning: 5,
-            "3+_objectives": 8,
-            mentions_ttl: 6,
-            no_premature_write: 8,
-        })
-    },
+const SCENARIOS: Scenario[] = [kvStoreScenario];
+const runId = new Date().toISOString().replace(/[:.]/g, "-").substring(0, 19);
+const logDir = `bench/logs/${runId}`;
+mkdirSync(logDir, { recursive: true });
 
-    scoreTurn2(result) {
-        const calls = result.toolCalls
-        const writes = calls.filter(c => c.name === "write_file")
-        const allCode = writes.map(c => c.args.content || "").join("\n")
-        const dbCode = writes.find(c => (c.args.path || "").includes("db"))?.args.content || ""
-        const serverCode = writes.find(c =>
-            (c.args.path || "").includes("server") && !(c.args.path || "").includes("test")
-        )?.args.content || ""
-        const testCode = writes.find(c => (c.args.path || "").includes("test"))?.args.content || ""
-
-        return computeScore(2, {
-            "writes_3+_files": writes.length >= 3,
-            "creates_db": writes.some(c => (c.args.path || "").includes("db")),
-            "creates_server": writes.some(c => (c.args.path || "").includes("server") && !(c.args.path || "").includes("test")),
-            "creates_tests": writes.some(c => (c.args.path || "").includes("test")),
-            "uses_bun_sqlite": /bun:sqlite/.test(dbCode),
-            "uses_bun_serve": /Bun\.serve|export\s+default/.test(serverCode),
-            "uses_bun_test": /bun:test/.test(testCode),
-            "imports_types": /from\s*["']\.\/(types)/.test(allCode),
-            "uses_prepared_stmt": /\.prepare\(/.test(dbCode),
-            "has_ttl_logic": /ttl|expir|created_at/i.test(dbCode),
-            "has_kv_endpoints": /\/kv/.test(serverCode),
-            "has_5+_tests": (testCode.match(/(?:it|test)\s*\(/g) || []).length >= 5,
-            "no_any": !/:\s*any\b/.test(allCode),
-        }, {
-            "writes_3+_files": 10, creates_db: 8, creates_server: 8, creates_tests: 8,
-            uses_bun_sqlite: 5, uses_bun_serve: 4, uses_bun_test: 3,
-            imports_types: 5, uses_prepared_stmt: 5, has_ttl_logic: 6,
-            has_kv_endpoints: 4, "has_5+_tests": 5, no_any: 4,
-        })
-    },
-
-    scoreTurn3(result) {
-        const calls = result.toolCalls
-        const writes = calls.filter(c => c.name === "write_file")
-        const done = calls.find(c => c.name === "done")
-        const allContent = [result.text, ...calls.map(c => JSON.stringify(c.args))].join(" ")
-        const fixCode = writes.map(c => c.args.content || "").join("\n")
-
-        return computeScore(3, {
-            "addresses_ttl_bug": /ttl|expir|expired|404|timestamp|Date\.now|time/i.test(allContent),
-            "writes_fix": writes.length > 0,
-            "fix_touches_db_or_server": writes.some(c => /db|server/.test(c.args.path || "")),
-            "updates_objectives": calls.some(c => c.name === "set_objectives"),
-            "fix_has_expiry_check": /expir|ttl.*check|Date\.now|created_at\s*\+\s*ttl|WHERE/i.test(fixCode),
-            "calls_done": !!done,
-            "done_has_summary": (done?.args.summary || "").length > 10,
-        }, {
-            addresses_ttl_bug: 10, writes_fix: 10, fix_touches_db_or_server: 8,
-            updates_objectives: 8, fix_has_expiry_check: 10,
-            calls_done: 6, done_has_summary: 3,
-        })
-    },
+function isTruncated(result: LLMResponse): boolean {
+  const reason = String(result.finishReason || "").toLowerCase();
+  return (
+    reason === "length" ||
+    reason.includes("max_tokens") ||
+    reason.includes("max tokens")
+  );
 }
 
-const SCENARIOS: Scenario[] = [kvStoreScenario]
-
-
-// ═══════════════════════════════════════════════════════════════════
-//   RUNNER
-// ═══════════════════════════════════════════════════════════════════
-
-const runId = new Date().toISOString().replace(/[:.]/g, "-").substring(0, 19)
-const logDir = `bench/logs/${runId}`
-mkdirSync(logDir, { recursive: true })
-configure({ maxResultLength: 400 })
-
 function writeLog(
-    strategy: string, scenario: string, turn: number, iter: number,
-    result: LLMResponse | null, latencyMs: number,
-    turnScore?: TurnScore, error?: string,
+  strategy: string,
+  scenario: string,
+  turn: number,
+  iter: number,
+  result: LLMResponse | null,
+  latencyMs: number,
+  turnScore?: TurnScore,
+  error?: string,
 ) {
-    const filename = `${logDir}/${scenario}_${strategy}_i${iter + 1}_t${turn}.txt`
-    const lines: string[] = [
-        `═══ ${scenario}/${strategy} iter#${iter + 1} turn#${turn} ═══  ${MODEL}  ${new Date().toISOString()}  ${latencyMs.toFixed(0)}ms`, ``
-    ]
-
-    const body = result?.request?.body
-    if (body?.systemInstruction?.parts?.[0]?.text) {
-        lines.push(`─── SYSTEM ───`, body.systemInstruction.parts[0].text.substring(0, 2000), ``)
+  const lines = [
+    `═══ ${scenario}/${strategy} iter#${iter + 1} turn#${turn} ═══ ${MODEL} ${new Date().toISOString()} ${latencyMs}ms`,
+    "",
+  ];
+  const prepared = result?.request?.prepared;
+  if (prepared?.system)
+    lines.push("─── SYSTEM ───", prepared.system.substring(0, 4000), "");
+  if (prepared?.messages) {
+    lines.push(`─── CANONICAL MESSAGES (${prepared.messages.length}) ───`);
+    for (const message of prepared.messages) {
+      const extra = message.toolCalls?.length
+        ? ` toolCalls=${JSON.stringify(message.toolCalls).substring(0, 3000)}`
+        : "";
+      const resultMeta =
+        message.role === "tool"
+          ? ` toolCallId=${message.toolCallId || "?"} toolName=${message.toolName || "?"}`
+          : "";
+      lines.push(
+        `[${message.role}]${resultMeta}${extra}\n${message.content.substring(0, 4000)}`,
+      );
     }
-    if (body?.contents) {
-        lines.push(`─── MESSAGES (${body.contents.length}) ───`)
-        for (const c of body.contents) {
-            const text = c.parts?.map((p: any) => p.text || `[FC: ${JSON.stringify(p.functionCall)}]`).join("") || ""
-            lines.push(`[${c.role}]: ${text.substring(0, 4000)}${text.length > 4000 ? "…" : ""}`)
-        }
-        lines.push(``)
-    }
-
-    lines.push(`─── RAW OUTPUT ───`)
-    if (error) lines.push(`ERROR: ${error}`)
-    else lines.push(JSON.stringify(result?.raw, null, 2))
-    lines.push(``)
-
-    if (result) {
-        lines.push(`─── PARSED ───`)
-        lines.push(`Text: ${(result.text || "(empty)").substring(0, 500)}`)
-        lines.push(`Tool calls: ${result.toolCalls.length}`)
-        for (const tc of result.toolCalls) {
-            const argsStr = JSON.stringify(tc.args)
-            lines.push(`  → ${tc.name}(${argsStr.substring(0, 1500)}${argsStr.length > 1500 ? "…" : ""})`)
-        }
-        lines.push(`Tokens: ${result.usage?.inputTokens || "?"} in → ${result.usage?.outputTokens || "?"} out`)
-    }
-    if (turnScore) {
-        lines.push(``, `─── TURN ${turn} SCORE: ${turnScore.score}% ───`, turnScore.details)
-    }
-    lines.push(``)
-    Bun.write(filename, lines.join("\n"))
+    lines.push("");
+  }
+  lines.push("─── RAW OUTPUT ───");
+  lines.push(error ? `ERROR: ${error}` : JSON.stringify(result?.raw, null, 2));
+  lines.push("");
+  if (result) {
+    lines.push("─── PARSED ───");
+    lines.push(`finishReason: ${result.finishReason || "?"}`);
+    lines.push(`Text: ${(result.text || "(empty)").substring(0, 1000)}`);
+    lines.push(`Tool calls: ${result.toolCalls.length}`);
+    for (const call of result.toolCalls)
+      lines.push(
+        `  → ${call.name}(${JSON.stringify(call.args).substring(0, 3000)})`,
+      );
+    lines.push(
+      `Tokens: ${result.usage?.inputTokens ?? "?"} in → ${result.usage?.outputTokens ?? "?"} out`,
+    );
+  }
+  if (turnScore)
+    lines.push(
+      "",
+      `─── TURN ${turn} SCORE: ${turnScore.score}% ───`,
+      turnScore.details,
+    );
+  writeFileSync(
+    `${logDir}/${scenario}_${strategy}_i${iter + 1}_t${turn}.txt`,
+    lines.join("\n"),
+  );
 }
 
 interface TurnResult {
-    turn: number; latencyMs: number
-    inputTokens: number; outputTokens: number
-    toolCalls: number; score: TurnScore
+  turn: number;
+  status: TurnStatus;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  toolCalls: number;
+  score: TurnScore;
+  error?: string;
 }
 
 interface RunResult {
-    scenario: string; strategy: string; iter: number
-    turns: TurnResult[]
-    totalScore: number
+  scenario: string;
+  strategy: string;
+  iter: number;
+  turns: TurnResult[];
+  complete: boolean;
+  totalScore?: number;
 }
 
-const emptyTurn = (turn: number): TurnResult => ({
-    turn, latencyMs: 0, inputTokens: 0, outputTokens: 0, toolCalls: 0,
+function failedTurn(turn: number, error: string): TurnResult {
+  return {
+    turn,
+    status: "error",
+    latencyMs: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    toolCalls: 0,
     score: { turn, checks: {}, score: 0, maxScore: 0, details: "ERROR" },
-})
+    error,
+  };
+}
+
+function toTurnResult(
+  turn: number,
+  result: LLMResponse,
+  latencyMs: number,
+  score: TurnScore,
+): TurnResult {
+  return {
+    turn,
+    status: isTruncated(result) ? "truncated" : "ok",
+    latencyMs,
+    inputTokens: result.usage?.inputTokens || 0,
+    outputTokens: result.usage?.outputTokens || 0,
+    toolCalls: result.toolCalls.length,
+    score,
+  };
+}
 
 async function runScenario(
-    scenario: Scenario,
-    strategyName: StrategyName,
-    iter: number,
-    m: (label: string, fn: () => Promise<string>) => Promise<string>,
+  scenario: Scenario,
+  strategyName: StrategyName,
+  iter: number,
 ): Promise<RunResult> {
-    const opts: CallOptions = { strategy: strategyName, model: MODEL, temperature: 0.1, maxTokens: 16000 }
-    const turns: TurnResult[] = []
-    const label = `${scenario.name}/${strategyName}#${iter + 1}`
+  const opts: CallOptions = {
+    strategy: strategyName,
+    model: MODEL,
+    temperature: 0.1,
+    maxTokens: MAX_TOKENS,
+    retries: 3,
+    timeoutMs: 90_000,
+  };
+  const turns: TurnResult[] = [];
 
-    // ── Turn 1: Discover + Plan ──
-    let turn1Result!: LLMResponse
-    await m(`${label}/discover`, async () => {
-        const start = Date.now()
-        try {
-            const tree = buildPrompt({
-                messages: [
-                    { role: "user", content: `${scenario.task}\n\nReview the available skills and activate the ones you need with use_skill. Then call set_objectives to define your plan. Do NOT write any code yet.` },
-                ],
-            })
-            turn1Result = await callLLM(tree, opts)
-            const latencyMs = Date.now() - start
-            const s = scenario.scoreTurn1(turn1Result)
-            writeLog(strategyName, scenario.name, 1, iter, turn1Result, latencyMs, s)
-            const skills = extractRequestedSkills(turn1Result)
-            turns.push({ turn: 1, latencyMs, inputTokens: turn1Result.usage?.inputTokens || 0, outputTokens: turn1Result.usage?.outputTokens || 0, toolCalls: turn1Result.toolCalls.length, score: s })
-            return `discover:${s.score}% ${latencyMs.toFixed(0)}ms skills:[${skills.join(",")}]`
-        } catch (e: any) {
-            writeLog(strategyName, scenario.name, 1, iter, null, Date.now() - start, undefined, e.message)
-            turns.push(emptyTurn(1))
-            return "ERROR"
-        }
-    })
-    await new Promise(r => setTimeout(r, 500))
+  let turn1: LLMResponse;
+  try {
+    const start = Date.now();
+    turn1 = await callLLM(
+      buildPrompt({
+        messages: [
+          {
+            role: "user",
+            content: `${scenario.task}\n\nReview available skills and call use_skill for what you need. Then call set_objectives. Do not write code yet.`,
+          },
+        ],
+      }),
+      opts,
+    );
+    const score = scenario.scoreTurn1(turn1);
+    const latency = Date.now() - start;
+    turns.push(toTurnResult(1, turn1, latency, score));
+    writeLog(strategyName, scenario.name, 1, iter, turn1, latency, score);
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    turns.push(failedTurn(1, message));
+    writeLog(strategyName, scenario.name, 1, iter, null, 0, undefined, message);
+    return {
+      scenario: scenario.name,
+      strategy: strategyName,
+      iter,
+      turns,
+      complete: false,
+    };
+  }
 
-    const requestedSkills = extractRequestedSkills(turn1Result)
+  const requestedSkills = extractRequestedSkills(turn1);
+  let turn2: LLMResponse;
+  try {
+    const start = Date.now();
+    turn2 = await callLLM(
+      buildPrompt({
+        messages: [
+          { role: "user", content: scenario.task },
+          resultToAssistantMessage(turn1),
+          ...resultToToolMessages(turn1),
+          { role: "user", content: scenario.turn2Injection },
+        ],
+        resolvedSkills: requestedSkills,
+      }),
+      opts,
+    );
+    const score = scenario.scoreTurn2(turn2);
+    const latency = Date.now() - start;
+    turns.push(toTurnResult(2, turn2, latency, score));
+    writeLog(strategyName, scenario.name, 2, iter, turn2, latency, score);
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    turns.push(failedTurn(2, message));
+    writeLog(strategyName, scenario.name, 2, iter, null, 0, undefined, message);
+    return {
+      scenario: scenario.name,
+      strategy: strategyName,
+      iter,
+      turns,
+      complete: false,
+    };
+  }
 
-    // ── Turn 2: Execute ──
-    let turn2Result!: LLMResponse
-    await m(`${label}/execute`, async () => {
-        const start = Date.now()
-        try {
-            const tree = buildPrompt({
-                messages: [
-                    { role: "user", content: scenario.task },
-                    { role: "assistant", content: summarizeTurn(turn1Result) },
-                    { role: "user", content: scenario.turn2Injection },
-                ],
-                resolvedSkills: requestedSkills,
-            })
-            turn2Result = await callLLM(tree, opts)
-            const latencyMs = Date.now() - start
-            const s = scenario.scoreTurn2(turn2Result)
-            writeLog(strategyName, scenario.name, 2, iter, turn2Result, latencyMs, s)
-            turns.push({ turn: 2, latencyMs, inputTokens: turn2Result.usage?.inputTokens || 0, outputTokens: turn2Result.usage?.outputTokens || 0, toolCalls: turn2Result.toolCalls.length, score: s })
-            return `execute:${s.score}% ${latencyMs.toFixed(0)}ms tools:${turn2Result.toolCalls.length}`
-        } catch (e: any) {
-            writeLog(strategyName, scenario.name, 2, iter, null, Date.now() - start, undefined, e.message)
-            turns.push(emptyTurn(2))
-            return "ERROR"
-        }
-    })
-    await new Promise(r => setTimeout(r, 500))
+  try {
+    const start = Date.now();
+    const turn3 = await callLLM(
+      buildPrompt({
+        messages: [
+          { role: "user", content: scenario.task },
+          resultToAssistantMessage(turn1),
+          ...resultToToolMessages(turn1),
+          { role: "user", content: scenario.turn2Injection },
+          resultToAssistantMessage(turn2),
+          ...resultToToolMessages(turn2),
+          { role: "user", content: scenario.turn3Injection },
+        ],
+        resolvedSkills: requestedSkills,
+      }),
+      opts,
+    );
+    const score = scenario.scoreTurn3(turn3);
+    const latency = Date.now() - start;
+    turns.push(toTurnResult(3, turn3, latency, score));
+    writeLog(strategyName, scenario.name, 3, iter, turn3, latency, score);
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    turns.push(failedTurn(3, message));
+    writeLog(strategyName, scenario.name, 3, iter, null, 0, undefined, message);
+  }
 
-    // ── Turn 3: Adapt ──
-    await m(`${label}/adapt`, async () => {
-        const start = Date.now()
-        try {
-            const tree = buildPrompt({
-                messages: [
-                    { role: "user", content: scenario.task },
-                    { role: "assistant", content: summarizeTurn(turn1Result) },
-                    { role: "user", content: scenario.turn2Injection },
-                    { role: "assistant", content: summarizeTurn(turn2Result) },
-                    { role: "user", content: scenario.turn3Injection },
-                ],
-                resolvedSkills: requestedSkills,
-            })
-            const turn3Result = await callLLM(tree, opts)
-            const latencyMs = Date.now() - start
-            const s = scenario.scoreTurn3(turn3Result)
-            writeLog(strategyName, scenario.name, 3, iter, turn3Result, latencyMs, s)
-            turns.push({ turn: 3, latencyMs, inputTokens: turn3Result.usage?.inputTokens || 0, outputTokens: turn3Result.usage?.outputTokens || 0, toolCalls: turn3Result.toolCalls.length, score: s })
-            return `adapt:${s.score}% ${latencyMs.toFixed(0)}ms tools:${turn3Result.toolCalls.length}`
-        } catch (e: any) {
-            writeLog(strategyName, scenario.name, 3, iter, null, Date.now() - start, undefined, e.message)
-            turns.push(emptyTurn(3))
-            return "ERROR"
-        }
-    })
-
-    const totalScore = turns.length > 0
-        ? Math.round(turns.reduce((s, t) => s + t.score.score, 0) / turns.length)
-        : 0
-
-    return { scenario: scenario.name, strategy: strategyName, iter, turns, totalScore }
+  const complete =
+    turns.length === 3 && turns.every((turn) => turn.status === "ok");
+  const totalScore = complete
+    ? Math.round(turns.reduce((sum, turn) => sum + turn.score.score, 0) / 3)
+    : undefined;
+  return {
+    scenario: scenario.name,
+    strategy: strategyName,
+    iter,
+    turns,
+    complete,
+    totalScore,
+  };
 }
 
+function seededShuffle<T>(items: readonly T[], seed: number): T[] {
+  const result = [...items];
+  let state = (seed + 1) * 0x9e3779b1;
+  const random = () => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x100000000;
+  };
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function mean(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function stddev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const avg = mean(values);
+  return Math.sqrt(
+    values.reduce((sum, value) => sum + Math.pow(value - avg, 2), 0) /
+      (values.length - 1),
+  );
+}
 
 async function main() {
-    await measure("Agentic Benchmark", async (m) => {
-        const results: RunResult[] = []
+  const results: RunResult[] = [];
+  console.log(
+    `Agent protocol benchmark: ${MODEL} × ${ITERATIONS} iterations × ${STRATEGY_NAMES.length} strategies`,
+  );
 
-        await m("Setup", async () =>
-            `${MODEL} × ${ITERATIONS}it × ${STRATEGY_NAMES.length} strategies × ${SCENARIOS.length} scenarios × 3 turns → ${logDir}/`
-        )
+  for (const scenario of SCENARIOS) {
+    for (let iter = 0; iter < ITERATIONS; iter++) {
+      // Rotate/randomize order deterministically so one strategy does not always hit rate limits first.
+      for (const strategy of seededShuffle(STRATEGY_NAMES, iter)) {
+        const result = await runScenario(scenario, strategy, iter);
+        results.push(result);
+        const statuses = result.turns
+          .map((turn) => `t${turn.turn}:${turn.status}/${turn.score.score}%`)
+          .join(" ");
+        console.log(`${scenario.name}/${strategy}#${iter + 1} ${statuses}`);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    }
+  }
 
-        for (const scenario of SCENARIOS) {
-            for (let i = 0; i < ITERATIONS; i++) {
-                for (const strategyName of STRATEGY_NAMES) {
-                    const result = await runScenario(scenario, strategyName, i, m)
-                    results.push(result)
-                    await new Promise(r => setTimeout(r, 800))
-                }
-            }
-        }
+  const lines = [
+    `Agent protocol benchmark`,
+    `run=${runId} model=${MODEL} iterations=${ITERATIONS} maxTokens=${MAX_TOKENS}`,
+    `Scores exclude runs with API errors or token-limit truncation.`,
+    "",
+  ];
 
-        return await m("Summary", async () => {
-            const lines: string[] = [``, `── Agentic Benchmark: 2-phase skills × 3-turn loop ──`]
-
-            for (const scenario of SCENARIOS) {
-                lines.push(``, `  ${scenario.name}:`)
-                for (const name of STRATEGY_NAMES) {
-                    const v = results.filter(r =>
-                        r.scenario === scenario.name && r.strategy === name && r.turns.length > 0
-                    )
-                    const n = v.length
-                    if (!n) { lines.push(`    ${name}: no results`); continue }
-
-                    const avgTotal = (v.reduce((s, r) => s + r.totalScore, 0) / n).toFixed(0)
-                    const byTurn = [1, 2, 3].map(t => {
-                        const td = v.flatMap(r => r.turns.filter(tt => tt.turn === t))
-                        return td.length
-                            ? `t${t}=${(td.reduce((s, tt) => s + tt.score.score, 0) / td.length).toFixed(0)}%`
-                            : `t${t}=?`
-                    }).join(" ")
-
-                    const totalLat = v.reduce((s, r) => s + r.turns.reduce((ss, t) => ss + t.latencyMs, 0), 0) / n
-                    const totalOut = v.reduce((s, r) => s + r.turns.reduce((ss, t) => ss + t.outputTokens, 0), 0) / n
-
-                    lines.push(`    ${name}: total=${avgTotal}% [${byTurn}] lat=${(totalLat / 1000).toFixed(1)}s out=${totalOut.toFixed(0)}tok`)
-                }
-            }
-
-            const out = {
-                runId, timestamp: new Date().toISOString(),
-                model: MODEL, iterations: ITERATIONS,
-                strategies: [...STRATEGY_NAMES],
-                scenarios: SCENARIOS.map(s => s.name),
-                turns: 3, logDir, results,
-            }
-            await Bun.write(`${logDir}/results.json`, JSON.stringify(out, null, 2))
-            await Bun.write("bench/results.json", JSON.stringify(out, null, 2))
-            return lines.join("\n")
+  for (const scenario of SCENARIOS) {
+    lines.push(`${scenario.name}:`);
+    for (const strategy of STRATEGY_NAMES) {
+      const runs = results.filter(
+        (run) => run.scenario === scenario.name && run.strategy === strategy,
+      );
+      const valid = runs.filter(
+        (run) => run.complete && run.totalScore != null,
+      );
+      const totals = valid.map((run) => run.totalScore!);
+      const errors = runs
+        .flatMap((run) => run.turns)
+        .filter((turn) => turn.status === "error").length;
+      const truncated = runs
+        .flatMap((run) => run.turns)
+        .filter((turn) => turn.status === "truncated").length;
+      const byTurn = [1, 2, 3]
+        .map((turnNumber) => {
+          const scores = runs.flatMap((run) =>
+            run.turns
+              .filter(
+                (turn) => turn.turn === turnNumber && turn.status === "ok",
+              )
+              .map((turn) => turn.score.score),
+          );
+          return scores.length
+            ? `t${turnNumber}=${mean(scores).toFixed(1)}±${stddev(scores).toFixed(1)}%`
+            : `t${turnNumber}=n/a`;
         })
-    })
+        .join(" ");
+      lines.push(
+        `  ${strategy}: valid=${valid.length}/${runs.length} ` +
+          `total=${totals.length ? `${mean(totals).toFixed(1)}±${stddev(totals).toFixed(1)}%` : "n/a"} ` +
+          `[${byTurn}] errors=${errors} truncated=${truncated}`,
+      );
+    }
+    lines.push("");
+  }
+
+  const summary = lines.join("\n");
+  const out = {
+    runId,
+    timestamp: new Date().toISOString(),
+    model: MODEL,
+    iterations: ITERATIONS,
+    maxTokens: MAX_TOKENS,
+    strategies: [...STRATEGY_NAMES],
+    scenarios: SCENARIOS.map((scenario) => scenario.name),
+    results,
+  };
+  writeFileSync(`${logDir}/results.json`, JSON.stringify(out, null, 2));
+  writeFileSync("bench/results.json", JSON.stringify(out, null, 2));
+  writeFileSync("bench/summary.txt", summary + "\n");
+  console.log("\n" + summary);
 }
 
-main().catch(console.error)
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

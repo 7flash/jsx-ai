@@ -1,19 +1,25 @@
-import type { PreparedPrompt, ProviderResponse } from "../types"
+import type { PreparedPrompt, ProviderResponse } from "../types";
 
-/**
- * Provider interface — converts PreparedPrompt ↔ API format.
- *
- * Strategies produce PreparedPrompts (provider-agnostic).
- * Providers convert those into API-specific requests and parse responses.
- */
+export interface ProviderRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: any;
+}
+
+/** Provider backend: canonical prepared prompt ↔ provider wire protocol. */
 export interface Provider {
-    name: string
-    /** Build the full request config: URL, headers, body */
-    buildRequest(prepared: PreparedPrompt, model: string, apiKey: string): {
-        url: string
-        headers: Record<string, string>
-        body: any
-    }
-    /** Normalize the raw API response into a ProviderResponse */
-    parseResponse(data: any): ProviderResponse
+  name: string;
+  buildRequest(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest;
+  parseResponse(data: any): ProviderResponse;
+  /** Optional streaming wire protocol. streamLLM throws if a custom provider omits these. */
+  buildStreamRequest?(
+    prepared: PreparedPrompt,
+    model: string,
+    apiKey: string,
+  ): ProviderRequest;
+  parseStreamEvent?(data: any): string;
 }
