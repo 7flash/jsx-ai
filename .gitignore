@@ -11,3 +11,5 @@ bench/REPORT.md
 
 .docs
 *.txt
+bench/logs
+game-output

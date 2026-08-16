@@ -114,7 +114,13 @@ describe("canonical prompt IR", () => {
         {
           role: "assistant",
           content: "",
-          toolCalls: [{ name: "exec", args: { command: "ls" } }],
+          toolCalls: [
+            {
+              name: "exec",
+              args: { command: "ls" },
+              providerMetadata: { gemini: { thoughtSignature: "sig" } },
+            },
+          ],
         },
         {
           role: "tool",
@@ -129,6 +135,18 @@ describe("canonical prompt IR", () => {
     if (prompt.messages[0].role !== "assistant")
       throw new Error("expected assistant");
     expect(prompt.messages[0].toolCalls?.[0].id).toBe("jsx_ir_0_0_exec");
+    expect(
+      prompt.messages[0].toolCalls?.[0].providerMetadata?.gemini
+        ?.thoughtSignature,
+    ).toBe("sig");
+    expect(
+      Object.isFrozen(prompt.messages[0].toolCalls?.[0].providerMetadata),
+    ).toBe(true);
+    expect(
+      Object.isFrozen(
+        prompt.messages[0].toolCalls?.[0].providerMetadata?.gemini,
+      ),
+    ).toBe(true);
 
     expect(() =>
       normalizePromptIR({

@@ -437,6 +437,21 @@ function normalizeArgs(value: unknown, context: string): JsonObject {
   return deepFreezeJson(normalized) as JsonObject;
 }
 
+function normalizeProviderMetadata(
+  value: ToolCall["providerMetadata"],
+  context: string,
+): Readonly<Record<string, JsonObject>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value))
+    fail(context, "must be an object keyed by provider name");
+  const result: Record<string, JsonObject> = {};
+  for (const [provider, metadata] of Object.entries(value)) {
+    nonEmptyString(provider, `${context} provider name`);
+    result[provider] = normalizeArgs(metadata, `${context}.${provider}`);
+  }
+  return Object.freeze(result);
+}
+
 function deepFreezeJson(value: JsonValue): JsonValue {
   if (Array.isArray(value)) {
     for (const item of value) deepFreezeJson(item);
@@ -459,10 +474,15 @@ export function normalizeToolCall(
     call.id === undefined
       ? nonEmptyString(fallbackId, `${context}.fallbackId`)
       : nonEmptyString(call.id, `${context}.id`);
+  const providerMetadata = normalizeProviderMetadata(
+    call.providerMetadata,
+    `${context}.providerMetadata`,
+  );
   return Object.freeze({
     id,
     name,
     args: normalizeArgs(call.args ?? {}, `${context}.args`),
+    ...(providerMetadata ? { providerMetadata } : {}),
   });
 }
 

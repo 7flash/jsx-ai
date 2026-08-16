@@ -22,6 +22,7 @@ import { md, runAgent } from "../src/index";
 import type { CanonicalToolCall, ExtractedMessage } from "../src/index";
 
 const MODEL = process.env.GAME_MODEL || "gemini-2.5-flash";
+const TEMPERATURE = /^gemini-3(?:\.|-|$)/i.test(MODEL) ? 1.0 : 0.2;
 const ROOT = resolve(process.argv[2] || "game-output");
 mkdirSync(ROOT, { recursive: true });
 
@@ -137,7 +138,12 @@ function toolResult(
 
 function promptTree(history: readonly ExtractedMessage[]) {
   return (
-    <prompt model={MODEL} strategy="hybrid" temperature={0.2} maxTokens={14000}>
+    <prompt
+      model={MODEL}
+      strategy="hybrid"
+      temperature={TEMPERATURE}
+      maxTokens={14000}
+    >
       <system>{md`
         You are an autonomous browser-game engineer working in a real project directory.
         Use the file tools to inspect and modify the project. Prefer a small coherent codebase.

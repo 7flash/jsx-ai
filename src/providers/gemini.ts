@@ -74,13 +74,18 @@ export class GeminiProvider implements Provider {
       const name = string(functionCall.name);
       if (!name)
         throw new Error("Gemini returned a functionCall without a name");
+      const id = string(functionCall.id);
+      const thoughtSignature = string(part.thoughtSignature);
       nativeToolCalls.push({
-        id: `gemini_${index}_${name}`,
+        ...(id ? { id } : { id: `gemini_${index}_${name}` }),
         name,
         args: jsonObject(
           functionCall.args ?? {},
           `Gemini tool call ${name} args`,
         ),
+        ...(thoughtSignature
+          ? { providerMetadata: { gemini: { thoughtSignature } } }
+          : {}),
       });
     }
 
@@ -122,6 +127,7 @@ export class GeminiProvider implements Provider {
         parts: [
           {
             functionResponse: {
+              id: message.toolCallId,
               name: message.toolName,
               response: this.resultPayload(message.content),
             },
@@ -133,7 +139,15 @@ export class GeminiProvider implements Provider {
     const parts: JsonObject[] = [];
     if (message.content) parts.push({ text: message.content });
     for (const call of message.toolCalls ?? []) {
-      parts.push({ functionCall: { name: call.name, args: call.args } });
+      const geminiMetadata = call.providerMetadata?.gemini;
+      const thoughtSignature =
+        geminiMetadata && typeof geminiMetadata.thoughtSignature === "string"
+          ? geminiMetadata.thoughtSignature
+          : undefined;
+      parts.push({
+        functionCall: { id: call.id, name: call.name, args: call.args },
+        ...(thoughtSignature ? { thoughtSignature } : {}),
+      });
     }
     if (parts.length === 0) parts.push({ text: "" });
     return { role: message.role === "assistant" ? "model" : "user", parts };

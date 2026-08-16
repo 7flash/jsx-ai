@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { array, record, string } from "../internal/json";
+import { jsx, jsxs } from "../jsx-runtime";
+import { extract } from "../render";
 import type { PreparedPrompt } from "../types";
 import { OpenAIProvider } from "./openai";
 import { GeminiProvider } from "./gemini";
@@ -71,6 +73,113 @@ describe("native history serialization", () => {
       ),
     ).toBe(true);
     expect(array(contents.at(-1)?.parts).length).toBeGreaterThan(1);
+  });
+
+  test("Gemini 3 round-trips function-call IDs and thought signatures", () => {
+    const provider = new GeminiProvider();
+    const parsed = provider.parseResponse({
+      candidates: [
+        {
+          content: {
+            role: "model",
+            parts: [
+              {
+                functionCall: {
+                  id: "fc-1",
+                  name: "write_file",
+                  args: { path: "a.txt", content: "A" },
+                },
+                thoughtSignature: "signature-A",
+              },
+              {
+                functionCall: {
+                  id: "fc-2",
+                  name: "write_file",
+                  args: { path: "b.txt", content: "B" },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(parsed.nativeToolCalls[0]?.id).toBe("fc-1");
+    expect(
+      parsed.nativeToolCalls[0]?.providerMetadata?.gemini?.thoughtSignature,
+    ).toBe("signature-A");
+    expect(parsed.nativeToolCalls[1]?.id).toBe("fc-2");
+    expect(parsed.nativeToolCalls[1]?.providerMetadata?.gemini).toBeUndefined();
+
+    // Regression: agent examples render canonical history back through JSX on
+    // every step. The JSX runtime must not strip opaque provider metadata.
+    const jsxHistory = jsxs("prompt", {
+      children: [
+        jsx("message", { role: "user", children: "write both files" }),
+        jsx("message", {
+          role: "assistant",
+          toolCalls: parsed.nativeToolCalls,
+        }),
+        jsx("message", {
+          role: "tool",
+          toolCallId: "fc-1",
+          toolName: "write_file",
+          children: "ok-a",
+        }),
+        jsx("message", {
+          role: "tool",
+          toolCallId: "fc-2",
+          toolName: "write_file",
+          children: "ok-b",
+        }),
+      ],
+    });
+    const jsxRoundTrip = extract(jsxHistory);
+    const jsxCalls =
+      jsxRoundTrip.messages[1]?.role === "assistant"
+        ? jsxRoundTrip.messages[1].toolCalls
+        : undefined;
+    expect(jsxCalls?.[0]?.providerMetadata?.gemini?.thoughtSignature).toBe(
+      "signature-A",
+    );
+
+    const roundTrip: PreparedPrompt = {
+      messages: [
+        { role: "user", content: "write both files" },
+        { role: "assistant", content: "", toolCalls: jsxCalls ?? [] },
+        {
+          role: "tool",
+          toolCallId: "fc-1",
+          toolName: "write_file",
+          content: "ok-a",
+        },
+        {
+          role: "tool",
+          toolCallId: "fc-2",
+          toolName: "write_file",
+          content: "ok-b",
+        },
+      ],
+    };
+    const body = provider.buildRequest(
+      roundTrip,
+      "gemini-3-flash-preview",
+      "key",
+    ).body;
+    const contents = array(body.contents).map(record).filter(Boolean);
+    const model = contents.find((content) => string(content?.role) === "model");
+    const modelParts = array(model?.parts).map(record).filter(Boolean);
+    expect(string(record(modelParts[0]?.functionCall)?.id)).toBe("fc-1");
+    expect(string(modelParts[0]?.thoughtSignature)).toBe("signature-A");
+    expect(string(record(modelParts[1]?.functionCall)?.id)).toBe("fc-2");
+    expect(modelParts[1]?.thoughtSignature).toBeUndefined();
+
+    const responseIds = contents
+      .flatMap((content) => array(content?.parts).map(record).filter(Boolean))
+      .map((part) => record(part?.functionResponse))
+      .filter(Boolean)
+      .map((response) => string(response?.id));
+    expect(responseIds).toEqual(["fc-1", "fc-2"]);
   });
 
   test("Anthropic honors temperature, emits tool_use/tool_result, and alternates roles", () => {

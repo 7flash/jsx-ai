@@ -5,6 +5,7 @@ import { jsonObject, jsonValue, record } from "./internal/json";
 import { normalizeJsonSchema, normalizeToolParametersSchema } from "./ir";
 import type {
   JsxAiNode,
+  JsonObject,
   JsonSchemaType,
   JsonValue,
   MessageNode,
@@ -226,6 +227,10 @@ function toolCallArray(value: unknown): ToolCall[] {
         `<message> toolCalls[${index}].id must be a string when provided`,
       );
     }
+    const providerMetadata = toolCallProviderMetadata(
+      candidate.providerMetadata,
+      `<message> toolCalls[${index}].providerMetadata`,
+    );
     return {
       ...(candidate.id ? { id: candidate.id } : {}),
       name: candidate.name,
@@ -233,8 +238,27 @@ function toolCallArray(value: unknown): ToolCall[] {
         candidate.args ?? {},
         `<message> toolCalls[${index}].args`,
       ),
+      ...(providerMetadata ? { providerMetadata } : {}),
     };
   });
+}
+
+function toolCallProviderMetadata(
+  value: unknown,
+  context: string,
+): Readonly<Record<string, JsonObject>> | undefined {
+  if (value === undefined) return undefined;
+  const outer = record(value);
+  if (!outer)
+    throw new TypeError(`${context} must be an object keyed by provider name`);
+
+  const result: Record<string, JsonObject> = {};
+  for (const [provider, metadata] of Object.entries(outer)) {
+    if (!provider.trim())
+      throw new TypeError(`${context} contains an empty provider name`);
+    result[provider] = jsonObject(metadata, `${context}.${provider}`);
+  }
+  return result;
 }
 
 function normalizeChildren(

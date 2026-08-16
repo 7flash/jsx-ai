@@ -72,6 +72,14 @@ export interface ToolCall {
   readonly id?: string;
   readonly name: string;
   readonly args: JsonObject;
+  /**
+   * Opaque provider-specific metadata that must round-trip with this call.
+   *
+   * Canonical agent semantics never interpret this data. Providers may use a
+   * namespaced entry to preserve protocol fields that are required on later
+   * turns (for example Gemini thought signatures).
+   */
+  readonly providerMetadata?: Readonly<Record<string, JsonObject>>;
 }
 
 /** Canonical history always has an identifier so tool results can be paired losslessly. */

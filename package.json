@@ -1,6 +1,6 @@
 {
   "name": "jsx-ai",
-  "version": "0.7.0",
+  "version": "0.7.2",
   "description": "Composable JSX frontend and runtime for provider-agnostic LLM prompts, tools, agents, and evaluation",
   "type": "module",
   "main": "src/index.ts",
