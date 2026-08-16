@@ -4,8 +4,10 @@ bun.lock
 
 # Bench artifacts
 bench/logs/
+bench/work/
 bench/results.json
 bench/output.txt
 bench/REPORT.md
 
 .docs
+*.txt
