@@ -18,10 +18,10 @@ import {
   writeFileSync,
 } from "fs";
 import { dirname, relative, resolve } from "path";
-import { callLLM, md } from "jsx-ai";
-import type { ExtractedMessage, ToolCall } from "jsx-ai";
+import { md, runAgent } from "../src/index";
+import type { ExtractedMessage, ToolCall } from "../src/index";
 
-const MODEL = process.env.GAME_MODEL || "gemini-3-flash-preview";
+const MODEL = process.env.GAME_MODEL || "gemini-2.5-flash";
 const ROOT = resolve(process.argv[2] || "game-output");
 mkdirSync(ROOT, { recursive: true });
 
@@ -131,7 +131,7 @@ function toolResult(
   };
 }
 
-function promptTree(history: ExtractedMessage[]) {
+function promptTree(history: readonly ExtractedMessage[]) {
   return (
     <prompt model={MODEL} strategy="hybrid" temperature={0.2} maxTokens={14000}>
       <system>{md`
@@ -164,41 +164,45 @@ async function runPhase(
   history: ExtractedMessage[],
   goal: string,
   maxSteps = 8,
-): Promise<void> {
-  history.push({ role: "user", content: goal });
-
-  for (let step = 0; step < maxSteps; step++) {
-    const result = await callLLM(promptTree(history), {
+): Promise<ExtractedMessage[]> {
+  const result = await runAgent({
+    history: [...history, { role: "user", content: goal }],
+    buildPrompt: (phaseHistory) => promptTree(phaseHistory),
+    executeTool,
+    callOptions: {
       model: MODEL,
       strategy: "hybrid",
       retries: 3,
       timeoutMs: 90_000,
-    });
+    },
+    maxSteps,
+    maxToolCalls: 48,
+    maxDurationMs: 8 * 60_000,
+    isComplete: (response) =>
+      response.toolCalls.some((call) => call.name === "phase_done"),
+    onNoToolCalls: () =>
+      "Continue by using the available tools. Call phase_done only after the phase is implemented.",
+    onEvent: (event) => {
+      if (event.type === "model_end") {
+        const names =
+          event.response.toolCalls.map((call) => call.name).join(", ") ||
+          "no tools";
+        console.log(`  model step ${event.context.step + 1}: ${names}`);
+      }
+    },
+  });
 
-    history.push({
-      role: "assistant",
-      content: result.text || "",
-      toolCalls: result.toolCalls,
-    });
-    if (!result.toolCalls.length) {
-      history.push({
-        role: "user",
-        content:
-          "Continue by using the available tools. Call phase_done only after the phase is implemented.",
-      });
-      continue;
-    }
-
-    const done = result.toolCalls.some((call) => call.name === "phase_done");
-    for (const call of result.toolCalls) history.push(executeTool(call));
-    if (done) return;
+  if (result.reason !== "completed") {
+    throw new Error(
+      `Phase stopped with ${result.reason} after ${result.steps.length} model steps`,
+    );
   }
-  throw new Error(`Phase exceeded ${maxSteps} model/tool iterations`);
+  return result.history;
 }
 
-const history: ExtractedMessage[] = [];
+let history: ExtractedMessage[] = [];
 
-await runPhase(
+history = await runPhase(
   history,
   md`
     PHASE 1 — BUILD THE GAME.
@@ -208,7 +212,7 @@ await runPhase(
   `,
 );
 
-await runPhase(
+history = await runPhase(
   history,
   md`
     PHASE 2 — ITERATE ON THE EXISTING CANVAS GAME.
@@ -218,7 +222,7 @@ await runPhase(
   `,
 );
 
-await runPhase(
+history = await runPhase(
   history,
   md`
     PHASE 3 — REWRITE THE PRESENTATION WITH THREE.JS.

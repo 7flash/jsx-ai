@@ -1,0 +1,127 @@
+import { describe, expect, test } from "bun:test";
+import { runAgent } from "./agent";
+import type { JsxAiNode, LLMResponse, ToolCall } from "./types";
+
+const emptyTree: JsxAiNode = { type: "fragment", children: [] };
+
+function response(
+  toolCalls: ToolCall[],
+  text = "",
+  inputTokens = 10,
+  outputTokens = 5,
+): LLMResponse {
+  return {
+    text,
+    toolCalls,
+    raw: {},
+    usage: { inputTokens, outputTokens },
+  };
+}
+
+describe("runAgent", () => {
+  test("preserves canonical history, assigns missing IDs, and stops on completion", async () => {
+    const calls: LLMResponse[] = [
+      response([
+        { name: "write_file", args: { path: "a.txt", content: "hello" } },
+      ]),
+      response([{ name: "done", args: { summary: "complete" } }]),
+    ];
+    const executed: string[] = [];
+
+    const result = await runAgent({
+      history: [{ role: "user", content: "build it" }],
+      buildPrompt: () => emptyTree,
+      call: async () => calls.shift()!,
+      executeTool: (call) => {
+        executed.push(call.name);
+        return `${call.name} ok`;
+      },
+      isComplete: (model) =>
+        model.toolCalls.some((call) => call.name === "done"),
+    });
+
+    expect(result.reason).toBe("completed");
+    expect(executed).toEqual(["write_file", "done"]);
+    expect(result.usage).toEqual({
+      inputTokens: 20,
+      outputTokens: 10,
+      thinkingTokens: 0,
+    });
+
+    const assistant = result.history.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.toolCalls?.[0]?.name === "write_file",
+    );
+    const tool = result.history.find(
+      (message) => message.role === "tool" && message.toolName === "write_file",
+    );
+    expect(assistant?.toolCalls?.[0]?.id).toBeTruthy();
+    expect(tool?.toolCallId).toBe(assistant?.toolCalls?.[0]?.id);
+  });
+
+  test("can recover from a no-tool model turn", async () => {
+    let index = 0;
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async () =>
+        index++ === 0
+          ? response([], "I will explain instead")
+          : response([{ name: "done", args: {} }]),
+      executeTool: () => "ok",
+      onNoToolCalls: () => "Use the tools and continue.",
+      isComplete: (model) =>
+        model.toolCalls.some((call) => call.name === "done"),
+    });
+
+    expect(result.reason).toBe("completed");
+    expect(
+      result.history.some(
+        (message) =>
+          message.role === "user" &&
+          message.content === "Use the tools and continue.",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not partially execute a batch that exceeds the tool budget", async () => {
+    let executions = 0;
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async () =>
+        response([
+          { name: "a", args: {} },
+          { name: "b", args: {} },
+        ]),
+      executeTool: () => {
+        executions++;
+        return "ok";
+      },
+      maxToolCalls: 1,
+    });
+
+    expect(result.reason).toBe("max_tool_calls");
+    expect(executions).toBe(0);
+    expect(result.toolCallsExecuted).toBe(0);
+    const skipped = result.history.filter((message) => message.role === "tool");
+    expect(skipped).toHaveLength(2);
+    expect(skipped.every((message) => message.isError)).toBe(true);
+  });
+
+  test("stops before another model call when an output-token budget is reached", async () => {
+    let modelCalls = 0;
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async () => {
+        modelCalls++;
+        return response([{ name: "work", args: {} }], "", 1, 8);
+      },
+      executeTool: () => "ok",
+      maxOutputTokens: 8,
+    });
+
+    expect(result.reason).toBe("max_output_tokens");
+    expect(modelCalls).toBe(1);
+    expect(result.toolCallsExecuted).toBe(1);
+  });
+});

@@ -1,3 +1,14 @@
+export { runAgent } from "./agent";
+export type {
+  AgentRunOptions,
+  AgentRunResult,
+  AgentStopReason,
+  AgentUsage,
+  AgentContext,
+  AgentStep,
+  AgentEvent,
+  AgentToolResult,
+} from "./agent";
 // jsx-ai — composable JSX frontend for a provider-agnostic LLM prompt IR.
 export {
   callLLM,

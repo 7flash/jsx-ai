@@ -32,6 +32,8 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Number of retries after the first attempt. Default: 3. */
   retries?: number;
+  /** Optional external cancellation signal. */
+  signal?: AbortSignal;
 }
 
 export interface CallOptions extends RequestOptions {
@@ -425,6 +427,46 @@ function retryDelayMs(response: Response, attempt: number): number {
   return Math.min(1000 * Math.pow(2, attempt), 10_000);
 }
 
+function attemptSignal(
+  timeoutMs: number,
+  external?: AbortSignal,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const abortFromExternal = () => controller.abort(external?.reason);
+
+  if (external?.aborted) controller.abort(external.reason);
+  else external?.addEventListener("abort", abortFromExternal, { once: true });
+
+  timer = setTimeout(
+    () => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+      external?.removeEventListener("abort", abortFromExternal);
+    },
+  };
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted)
+    return Promise.reject(signal.reason || new Error("Aborted"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason || new Error("Aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -432,18 +474,16 @@ async function fetchWithRetry(
 ): Promise<Response> {
   const retries = Math.max(0, options?.retries ?? 3);
   const timeoutMs = Math.max(1, options?.timeoutMs ?? 60_000);
+  const externalSignal = options?.signal;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    if (externalSignal?.aborted)
+      throw externalSignal.reason || new Error("Aborted");
+    const { signal, cleanup } = attemptSignal(timeoutMs, externalSignal);
     try {
-      const signal =
-        typeof AbortSignal.timeout === "function"
-          ? AbortSignal.timeout(timeoutMs)
-          : undefined;
-      const response = await fetch(url, {
-        ...init,
-        ...(signal ? { signal } : {}),
-      });
+      const response = await fetch(url, { ...init, signal });
+      cleanup();
       const retryable =
         response.status === 429 ||
         response.status === 500 ||
@@ -455,12 +495,15 @@ async function fetchWithRetry(
       try {
         await response.body?.cancel();
       } catch {}
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await sleep(delay, externalSignal);
     } catch (error) {
+      cleanup();
       lastError = error;
+      if (externalSignal?.aborted) throw externalSignal.reason || error;
       if (attempt === retries) throw error;
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(1000 * Math.pow(2, attempt), 10_000)),
+      await sleep(
+        Math.min(1000 * Math.pow(2, attempt), 10_000),
+        externalSignal,
       );
     }
   }
