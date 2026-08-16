@@ -29,6 +29,9 @@ export interface AgentToolResult {
   isError?: boolean;
 }
 
+export type AgentToolExecutorResult =
+  AgentToolResult | ExtractedMessage | string;
+
 export interface AgentContext<State = unknown> {
   /** Zero-based model step about to run, or that just ran for callbacks. */
   step: number;
@@ -36,6 +39,8 @@ export interface AgentContext<State = unknown> {
   usage: Readonly<AgentUsage>;
   toolCallsExecuted: number;
   elapsedMs: number;
+  /** Effective cancellation signal, including caller cancellation and maxDurationMs. */
+  signal?: AbortSignal;
   state: State;
 }
 
@@ -65,6 +70,8 @@ export interface AgentRunResult<State = unknown> {
   usage: AgentUsage;
   toolCallsExecuted: number;
   elapsedMs: number;
+  /** Effective cancellation signal, including caller cancellation and maxDurationMs. */
+  signal?: AbortSignal;
   state: State;
 }
 
@@ -80,11 +87,7 @@ export interface AgentRunOptions<State = undefined> {
   executeTool: (
     call: ToolCall,
     context: AgentContext<State>,
-  ) =>
-    | AgentToolResult
-    | ExtractedMessage
-    | string
-    | Promise<AgentToolResult | ExtractedMessage | string>;
+  ) => AgentToolExecutorResult | Promise<AgentToolExecutorResult>;
   /** Options passed through to callLLM on each step. */
   callOptions?: CallOptions;
   /** Dependency injection for tests/custom runtimes. Defaults to callLLM. */
@@ -122,9 +125,9 @@ export interface AgentRunOptions<State = undefined> {
 
 function usageFrom(result: LLMResponse): AgentUsage {
   return {
-    inputTokens: result.usage?.inputTokens || 0,
-    outputTokens: result.usage?.outputTokens || 0,
-    thinkingTokens: result.usage?.thinkingTokens || 0,
+    inputTokens: result.usage?.inputTokens ?? 0,
+    outputTokens: result.usage?.outputTokens ?? 0,
+    thinkingTokens: result.usage?.thinkingTokens ?? 0,
   };
 }
 
@@ -138,13 +141,12 @@ function normalizeCalls(calls: readonly ToolCall[], step: number): ToolCall[] {
   return calls.map((call, index) => ({
     ...call,
     id: call.id || `jsx_ai_${step}_${index}_${call.name}`,
-    args: call.args || {},
   }));
 }
 
 function normalizeToolResult(
   call: ToolCall,
-  value: AgentToolResult | ExtractedMessage | string,
+  value: AgentToolExecutorResult,
 ): ExtractedMessage {
   if (typeof value === "string") {
     return {
@@ -189,6 +191,14 @@ function finiteLimit(
   return value;
 }
 
+function combineSignals(
+  first?: AbortSignal,
+  second?: AbortSignal,
+): AbortSignal | undefined {
+  if (!first) return second;
+  if (!second || first === second) return first;
+  return AbortSignal.any([first, second]);
+}
 function budgetLimit(value: number | undefined): number {
   if (value == null) return Number.POSITIVE_INFINITY;
   if (Number.isNaN(value) || value < 0)
@@ -208,7 +218,7 @@ function budgetLimit(value: number | undefined): number {
 export async function runAgent<State = undefined>(
   options: AgentRunOptions<State>,
 ): Promise<AgentRunResult<State>> {
-  const history = [...(options.history || [])];
+  const history = [...(options.history ?? [])];
   const steps: AgentStep[] = [];
   const usage: AgentUsage = {
     inputTokens: 0,
@@ -222,7 +232,15 @@ export async function runAgent<State = undefined>(
   const maxInputTokens = budgetLimit(options.maxInputTokens);
   const maxOutputTokens = budgetLimit(options.maxOutputTokens);
   const maxDurationMs = budgetLimit(options.maxDurationMs);
-  const invoke = options.call || callLLM;
+  const invoke = options.call ?? callLLM;
+  const externalSignal = combineSignals(
+    options.signal,
+    options.callOptions?.signal,
+  );
+  const deadlineSignal = Number.isFinite(maxDurationMs)
+    ? AbortSignal.timeout(maxDurationMs)
+    : undefined;
+  const operationSignal = combineSignals(externalSignal, deadlineSignal);
   let toolCallsExecuted = 0;
 
   const context = (step: number): AgentContext<State> => ({
@@ -231,12 +249,14 @@ export async function runAgent<State = undefined>(
     usage: { ...usage },
     toolCallsExecuted,
     elapsedMs: Date.now() - startedAt,
+    ...(operationSignal ? { signal: operationSignal } : {}),
     state,
   });
 
   const budgetStopReason = (): AgentStopReason | undefined => {
-    if (options.signal?.aborted) return "aborted";
-    if (Date.now() - startedAt >= maxDurationMs) return "max_duration";
+    if (externalSignal?.aborted) return "aborted";
+    if (deadlineSignal?.aborted || Date.now() - startedAt >= maxDurationMs)
+      return "max_duration";
     if (usage.inputTokens >= maxInputTokens) return "max_input_tokens";
     if (usage.outputTokens >= maxOutputTokens) return "max_output_tokens";
     return undefined;
@@ -282,21 +302,21 @@ export async function runAgent<State = undefined>(
       rawResponse = await invoke(options.buildPrompt(history, context(step)), {
         ...options.callOptions,
         ...(timeoutMs != null ? { timeoutMs } : {}),
-        signal: options.signal || options.callOptions?.signal,
+        signal: operationSignal,
       });
     } catch (error) {
-      if (options.signal?.aborted) return finish("aborted", step);
-      if (Date.now() - startedAt >= maxDurationMs)
+      if (externalSignal?.aborted) return finish("aborted", step);
+      if (deadlineSignal?.aborted || Date.now() - startedAt >= maxDurationMs)
         return finish("max_duration", step);
       throw error;
     }
 
-    const calls = normalizeCalls(rawResponse.toolCalls || [], step);
+    const calls = normalizeCalls(rawResponse.toolCalls, step);
     const response: LLMResponse = { ...rawResponse, toolCalls: calls };
     addUsage(usage, usageFrom(response));
     history.push({
       role: "assistant",
-      content: response.text || "",
+      content: response.text,
       toolCalls: calls,
     });
     await emit({ type: "model_end", context: context(step), response });
@@ -337,7 +357,7 @@ export async function runAgent<State = undefined>(
     }
 
     const executeOne = async (call: ToolCall): Promise<ExtractedMessage> => {
-      if (options.signal?.aborted) {
+      if (operationSignal?.aborted) {
         return normalizeToolResult(call, {
           content: "Agent run aborted before tool execution.",
           isError: true,

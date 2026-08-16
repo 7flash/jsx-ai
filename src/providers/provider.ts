@@ -1,4 +1,9 @@
-import type { JsonObject, PreparedPrompt, ProviderResponse } from "../types";
+import type {
+  JsonObject,
+  PreparedPrompt,
+  ProviderName,
+  ProviderResponse,
+} from "../types";
 
 export interface ProviderRequest {
   url: string;
@@ -8,7 +13,7 @@ export interface ProviderRequest {
 
 /** Provider backend: canonical prepared prompt ↔ provider wire protocol. */
 export interface Provider {
-  readonly name: string;
+  readonly name: ProviderName;
   buildRequest(
     prepared: PreparedPrompt,
     model: string,

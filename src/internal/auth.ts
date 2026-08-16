@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { resolve as resolvePath } from "path";
+import { JsxAiError } from "../errors";
 import type { Provider } from "../providers/provider";
 import type { RequestOptions } from "./transport";
 import { errorCode } from "./errors";
@@ -58,7 +59,8 @@ export function resolveApiKey(
 
   const config = configApiKey(provider.name);
   if (config) return config;
-  throw new Error(
+  throw new JsxAiError(
+    "MISSING_API_KEY",
     `No API key found for ${provider.name}. Pass apiKey, set a provider-specific environment variable, ` +
       `or add [${provider.name}] api_key to .config.toml.`,
   );

@@ -1,3 +1,4 @@
+import { JsxAiError } from "../errors";
 import type { Provider } from "../providers/provider";
 import { AnthropicProvider } from "../providers/anthropic";
 import { GeminiProvider } from "../providers/gemini";
@@ -31,21 +32,95 @@ const providers = new Map<string, Provider>([
 
 function registrationName(name: string, kind: "provider" | "strategy"): string {
   const normalized = name.trim();
-  if (!normalized) throw new Error(`Cannot register an empty ${kind} name`);
+  if (!normalized) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      `Cannot register an empty ${kind} name`,
+    );
+  }
   return normalized;
 }
 
-export function registerProvider(name: string, provider: Provider): void {
-  providers.set(registrationName(name, "provider"), provider);
+function install<T extends { readonly name: string }>(
+  registry: Map<string, T>,
+  kind: "provider" | "strategy",
+  name: string,
+  value: T,
+): () => void {
+  const normalized = registrationName(name, kind);
+  if (value.name !== normalized) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      `${kind} registration name "${normalized}" must match ${kind}.name "${value.name}"`,
+    );
+  }
+
+  const previous = registry.get(normalized);
+  registry.set(normalized, value);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    if (registry.get(normalized) !== value) return;
+    if (previous) registry.set(normalized, previous);
+    else registry.delete(normalized);
+  };
 }
 
-export function registerStrategy(name: string, strategy: RenderStrategy): void {
+export function registerProvider(provider: Provider): () => void;
+export function registerProvider(name: string, provider: Provider): () => void;
+export function registerProvider(
+  nameOrProvider: string | Provider,
+  maybeProvider?: Provider,
+): () => void {
+  const provider =
+    typeof nameOrProvider === "string" ? maybeProvider : nameOrProvider;
+  if (!provider) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      "registerProvider requires a provider",
+    );
+  }
+  const name =
+    typeof nameOrProvider === "string" ? nameOrProvider : provider.name;
+  return install(providers, "provider", name, provider);
+}
+
+export function registerStrategy(strategy: RenderStrategy): () => void;
+export function registerStrategy(
+  name: string,
+  strategy: RenderStrategy,
+): () => void;
+export function registerStrategy(
+  nameOrStrategy: string | RenderStrategy,
+  maybeStrategy?: RenderStrategy,
+): () => void {
+  const strategy =
+    typeof nameOrStrategy === "string" ? maybeStrategy : nameOrStrategy;
+  if (!strategy) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      "registerStrategy requires a strategy",
+    );
+  }
+  const name =
+    typeof nameOrStrategy === "string" ? nameOrStrategy : strategy.name;
   const normalized = registrationName(name, "strategy");
-  if (normalized === "auto")
-    throw new Error(
+  if (normalized === "auto") {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
       '"auto" is reserved and cannot be registered as a strategy',
     );
-  strategies.set(normalized, strategy);
+  }
+  return install(strategies, "strategy", normalized, strategy);
+}
+
+export function listProviders(): readonly string[] {
+  return [...providers.keys()];
+}
+
+export function listStrategies(): readonly string[] {
+  return ["auto", ...strategies.keys()];
 }
 
 export function resolveStrategy(
@@ -55,10 +130,12 @@ export function resolveStrategy(
   const choice = String(override ?? prompt.strategy ?? "auto");
   if (choice === "auto") return hybrid;
   const strategy = strategies.get(choice);
-  if (!strategy)
-    throw new Error(
-      `Unknown strategy: ${choice}. Available: auto, ${[...strategies.keys()].join(", ")}`,
+  if (!strategy) {
+    throw new JsxAiError(
+      "UNKNOWN_STRATEGY",
+      `Unknown strategy: ${choice}. Available: ${listStrategies().join(", ")}`,
     );
+  }
   return strategy;
 }
 
@@ -75,9 +152,11 @@ export function resolveProvider(
 ): Provider {
   const name = String(override ?? detectProvider(model));
   const provider = providers.get(name);
-  if (!provider)
-    throw new Error(
-      `Unknown provider: ${name}. Available: ${[...providers.keys()].join(", ")}`,
+  if (!provider) {
+    throw new JsxAiError(
+      "UNKNOWN_PROVIDER",
+      `Unknown provider: ${name}. Available: ${listProviders().join(", ")}`,
     );
+  }
   return provider;
 }

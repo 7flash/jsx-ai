@@ -8,7 +8,9 @@ export type {
   AgentStep,
   AgentEvent,
   AgentToolResult,
+  AgentToolExecutorResult,
 } from "./agent";
+
 // jsx-ai — composable JSX frontend for a provider-agnostic LLM prompt IR.
 export {
   callLLM,
@@ -17,14 +19,29 @@ export {
   render,
   registerStrategy,
   registerProvider,
+  listStrategies,
+  listProviders,
   registerHook,
 } from "./llm";
 export type {
   CallOptions,
   RequestOptions,
+  TextMessage,
+  TextCallOptions,
   PromptHook,
   PromptEvent,
 } from "./llm";
+
+export {
+  JsxAiError,
+  HttpError,
+  ResponseParseError,
+  RequestTimeoutError,
+  TransportError,
+  isJsxAiError,
+} from "./errors";
+export type { JsxAiErrorCode } from "./errors";
+
 export type {
   JsonPrimitive,
   JsonValue,

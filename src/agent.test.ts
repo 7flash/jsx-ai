@@ -145,4 +145,25 @@ describe("runAgent", () => {
     expect(firstContextHistory).toHaveLength(0);
     expect(result.history.length).toBeGreaterThan(0);
   });
+
+  test("combines run-level and call-level cancellation signals", async () => {
+    const runController = new AbortController();
+    const callController = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      signal: runController.signal,
+      callOptions: { signal: callController.signal },
+      call: async (_tree, options) => {
+        receivedSignal = options?.signal;
+        callController.abort(new Error("cancelled by call options"));
+        throw new Error("cancelled");
+      },
+      executeTool: () => "unused",
+    });
+
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(result.reason).toBe("aborted");
+  });
 });

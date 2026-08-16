@@ -1,9 +1,12 @@
 // ── jsx-ai LLM runtime ──
 // JSX → canonical IR → strategy lowering → provider backend → normalized response.
 
+import { JsxAiError } from "./errors";
 import { errorMessage } from "./internal/errors";
 import { resolveApiKey } from "./internal/auth";
 import {
+  listProviders,
+  listStrategies,
   registerProvider,
   registerStrategy,
   resolveProvider,
@@ -30,13 +33,23 @@ import type { Provider, ProviderRequest } from "./providers/provider";
 import { extract } from "./render";
 
 export type { LLMResponse, RequestOptions };
-
-export { registerProvider, registerStrategy };
+export { listProviders, listStrategies, registerProvider, registerStrategy };
 
 export interface CallOptions extends RequestOptions {
   provider?: ProviderName;
   strategy?: StrategyName;
   model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+export interface TextMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface TextCallOptions extends RequestOptions {
+  provider?: ProviderName;
   temperature?: number;
   maxTokens?: number;
 }
@@ -121,12 +134,24 @@ interface ResolvedCall {
   request: ProviderRequest;
 }
 
-function resolveCall(tree: JsxAiNode, options?: CallOptions): ResolvedCall {
-  const prompt = extract(tree);
-  if (options?.model) prompt.model = options.model;
-  if (options?.temperature != null) prompt.temperature = options.temperature;
-  if (options?.maxTokens != null) prompt.maxTokens = options.maxTokens;
+function withCallOverrides(
+  prompt: ExtractedPrompt,
+  options?: CallOptions,
+): ExtractedPrompt {
+  return {
+    ...prompt,
+    ...(options?.model !== undefined ? { model: options.model } : {}),
+    ...(options?.temperature !== undefined
+      ? { temperature: options.temperature }
+      : {}),
+    ...(options?.maxTokens !== undefined
+      ? { maxTokens: options.maxTokens }
+      : {}),
+  };
+}
 
+function resolveCall(tree: JsxAiNode, options?: CallOptions): ResolvedCall {
+  const prompt = withCallOverrides(extract(tree), options);
   const strategy = resolveStrategy(prompt, options?.strategy);
   const model = prompt.model || "gemini-2.5-flash";
   const provider = resolveProvider(
@@ -154,7 +179,7 @@ function requestInit(request: ProviderRequest): RequestInit {
 }
 
 function textPrepared(
-  messages: readonly { role: string; content: string }[],
+  messages: readonly TextMessage[],
   temperature: number,
   maxTokens: number,
 ): {
@@ -167,11 +192,12 @@ function textPrepared(
     .map((message) => message.content)
     .join("\n\n");
   const telemetryMessages: ExtractedMessage[] = messages
-    .filter((message) => message.role !== "system")
-    .map((message) => ({
-      role: message.role === "assistant" ? "assistant" : "user",
-      content: message.content,
-    }));
+    .filter(
+      (message): message is TextMessage & { role: "user" | "assistant" } =>
+        message.role !== "system",
+    )
+    .map((message) => ({ role: message.role, content: message.content }));
+
   return {
     prepared: {
       system: system || undefined,
@@ -284,12 +310,8 @@ export function render(tree: JsxAiNode): ExtractedPrompt {
 
 export async function callText(
   model: string,
-  messages: readonly { role: string; content: string }[],
-  options?: RequestOptions & {
-    provider?: ProviderName;
-    temperature?: number;
-    maxTokens?: number;
-  },
+  messages: readonly TextMessage[],
+  options?: TextCallOptions,
 ): Promise<string> {
   const startedAt = Date.now();
   const provider = resolveProvider(model, options?.provider);
@@ -341,17 +363,16 @@ export async function callText(
 
 export async function* streamLLM(
   model: string,
-  messages: readonly { role: string; content: string }[],
-  options?: RequestOptions & {
-    provider?: ProviderName;
-    temperature?: number;
-    maxTokens?: number;
-  },
+  messages: readonly TextMessage[],
+  options?: TextCallOptions,
 ): AsyncGenerator<string> {
   const startedAt = Date.now();
   const provider = resolveProvider(model, options?.provider);
   if (!provider.buildStreamRequest || !provider.parseStreamEvent) {
-    throw new Error(`Provider ${provider.name} does not implement streaming`);
+    throw new JsxAiError(
+      "UNSUPPORTED_CAPABILITY",
+      `Provider ${provider.name} does not implement streaming`,
+    );
   }
   const apiKey = resolveApiKey(provider, options);
   const { prepared, telemetryMessages, system } = textPrepared(
