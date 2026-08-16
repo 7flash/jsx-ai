@@ -19,7 +19,7 @@ import {
 } from "fs";
 import { dirname, relative, resolve } from "path";
 import { md, runAgent } from "../src/index";
-import type { ExtractedMessage, ToolCall } from "../src/index";
+import type { CanonicalToolCall, ExtractedMessage } from "../src/index";
 
 const MODEL = process.env.GAME_MODEL || "gemini-2.5-flash";
 const ROOT = resolve(process.argv[2] || "game-output");
@@ -86,7 +86,7 @@ function listFiles(dir = ROOT): string[] {
   return result.sort();
 }
 
-function executeTool(call: ToolCall): ExtractedMessage {
+function executeTool(call: CanonicalToolCall): ExtractedMessage {
   try {
     switch (call.name) {
       case "write_file": {
@@ -122,7 +122,7 @@ function executeTool(call: ToolCall): ExtractedMessage {
 }
 
 function toolResult(
-  call: ToolCall,
+  call: CanonicalToolCall,
   content: string,
   isError = false,
 ): ExtractedMessage {

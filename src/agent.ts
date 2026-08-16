@@ -1,7 +1,9 @@
 import { callLLM } from "./llm";
 import { errorMessage } from "./internal/errors";
+import { normalizePromptIR, normalizeToolCall } from "./ir";
 import type { CallOptions } from "./llm";
 import type {
+  CanonicalToolCall,
   ExtractedMessage,
   JsxAiNode,
   LLMResponse,
@@ -54,11 +56,15 @@ export interface AgentStep {
 export type AgentEvent<State = unknown> =
   | { type: "model_start"; context: AgentContext<State> }
   | { type: "model_end"; context: AgentContext<State>; response: LLMResponse }
-  | { type: "tool_start"; context: AgentContext<State>; call: ToolCall }
+  | {
+      type: "tool_start";
+      context: AgentContext<State>;
+      call: CanonicalToolCall;
+    }
   | {
       type: "tool_end";
       context: AgentContext<State>;
-      call: ToolCall;
+      call: CanonicalToolCall;
       result: ExtractedMessage;
     }
   | { type: "stop"; context: AgentContext<State>; reason: AgentStopReason };
@@ -85,7 +91,7 @@ export interface AgentRunOptions<State = undefined> {
   ) => JsxAiNode;
   /** Execute one requested tool and return its canonical result payload. */
   executeTool: (
-    call: ToolCall,
+    call: CanonicalToolCall,
     context: AgentContext<State>,
   ) => AgentToolExecutorResult | Promise<AgentToolExecutorResult>;
   /** Options passed through to callLLM on each step. */
@@ -137,24 +143,30 @@ function addUsage(total: AgentUsage, next: AgentUsage): void {
   total.thinkingTokens += next.thinkingTokens;
 }
 
-function normalizeCalls(calls: readonly ToolCall[], step: number): ToolCall[] {
-  return calls.map((call, index) => ({
-    ...call,
-    id: call.id || `jsx_ai_${step}_${index}_${call.name}`,
-  }));
+function normalizeCalls(
+  calls: readonly ToolCall[],
+  step: number,
+): CanonicalToolCall[] {
+  return calls.map((call, index) =>
+    normalizeToolCall(
+      call,
+      `jsx_ai_${step}_${index}_${call.name}`,
+      `agent step ${step} toolCalls[${index}]`,
+    ),
+  );
 }
 
 function normalizeToolResult(
-  call: ToolCall,
+  call: CanonicalToolCall,
   value: AgentToolExecutorResult,
 ): ExtractedMessage {
   if (typeof value === "string") {
-    return {
+    return Object.freeze({
       role: "tool",
       content: value,
       toolCallId: call.id,
       toolName: call.name,
-    };
+    });
   }
 
   if ("role" in value) {
@@ -162,20 +174,26 @@ function normalizeToolResult(
       throw new Error(
         `Tool executor for ${call.name} returned a non-tool message`,
       );
-    return {
-      ...value,
-      toolCallId: value.toolCallId || call.id,
-      toolName: value.toolName || call.name,
-    };
+    if (value.toolCallId !== call.id) {
+      throw new Error(
+        `Tool executor for ${call.name} returned toolCallId ${JSON.stringify(value.toolCallId)}; expected ${JSON.stringify(call.id)}`,
+      );
+    }
+    if (value.toolName !== call.name) {
+      throw new Error(
+        `Tool executor for ${call.name} returned toolName ${JSON.stringify(value.toolName)}; expected ${JSON.stringify(call.name)}`,
+      );
+    }
+    return Object.freeze({ ...value });
   }
 
-  return {
+  return Object.freeze({
     role: "tool",
     content: value.content,
     toolCallId: call.id,
     toolName: call.name,
     ...(value.isError ? { isError: true } : {}),
-  };
+  });
 }
 
 function finiteLimit(
@@ -218,7 +236,10 @@ function budgetLimit(value: number | undefined): number {
 export async function runAgent<State = undefined>(
   options: AgentRunOptions<State>,
 ): Promise<AgentRunResult<State>> {
-  const history = [...(options.history ?? [])];
+  const history = [
+    ...normalizePromptIR({ tools: [], messages: options.history ?? [] })
+      .messages,
+  ];
   const steps: AgentStep[] = [];
   const usage: AgentUsage = {
     inputTokens: 0,
@@ -314,11 +335,13 @@ export async function runAgent<State = undefined>(
     const calls = normalizeCalls(rawResponse.toolCalls, step);
     const response: LLMResponse = { ...rawResponse, toolCalls: calls };
     addUsage(usage, usageFrom(response));
-    history.push({
-      role: "assistant",
-      content: response.text,
-      toolCalls: calls,
-    });
+    history.push(
+      Object.freeze({
+        role: "assistant",
+        content: response.text,
+        toolCalls: Object.freeze(calls),
+      }),
+    );
     await emit({ type: "model_end", context: context(step), response });
 
     if (!calls.length) {
@@ -330,7 +353,7 @@ export async function runAgent<State = undefined>(
         durationMs: Date.now() - stepStartedAt,
       });
       if (typeof recovery === "string" && recovery.trim()) {
-        history.push({ role: "user", content: recovery });
+        history.push(Object.freeze({ role: "user", content: recovery }));
         continue;
       }
       return finish("no_tool_calls", step);
@@ -356,7 +379,9 @@ export async function runAgent<State = undefined>(
       return finish("max_tool_calls", step);
     }
 
-    const executeOne = async (call: ToolCall): Promise<ExtractedMessage> => {
+    const executeOne = async (
+      call: CanonicalToolCall,
+    ): Promise<ExtractedMessage> => {
       if (operationSignal?.aborted) {
         return normalizeToolResult(call, {
           content: "Agent run aborted before tool execution.",

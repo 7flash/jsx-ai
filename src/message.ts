@@ -26,7 +26,7 @@ export function formatMessageForTextProtocol(
 
 /** Convert canonical tool history into ordinary user/assistant text for text-only protocols. */
 export function textProtocolMessages(
-  messages: ExtractedMessage[],
+  messages: readonly ExtractedMessage[],
 ): ExtractedMessage[] {
   return messages.map((message) => ({
     role: message.role === "tool" ? "user" : message.role,

@@ -46,6 +46,9 @@ export type {
   JsonPrimitive,
   JsonValue,
   JsonObject,
+  JsonSchemaType,
+  JsonSchema,
+  ToolParametersSchema,
   BuiltinProviderName,
   ProviderName,
   BuiltinStrategyName,
@@ -60,14 +63,30 @@ export type {
   FragmentNode,
   ExtractedTool,
   ExtractedMessage,
+  UserPromptMessage,
+  AssistantPromptMessage,
+  ToolResultPromptMessage,
   ExtractedPrompt,
+  ToolDefinition,
+  PromptMessage,
+  PromptIR,
   PreparedPrompt,
   ProviderResponse,
   ToolCall,
+  CanonicalToolCall,
   LLMResponse,
   RenderStrategy,
 } from "./types";
 export { extract } from "./render";
+export {
+  normalizeJsonSchema,
+  normalizeToolParametersSchema,
+  normalizePromptIR,
+  normalizeToolCall,
+  normalizePreparedPrompt,
+  jsonSchemaToJson,
+} from "./ir";
+export type { PromptIRInput, PromptMessageInput } from "./ir";
 export { native } from "./strategies/native";
 export { xml } from "./strategies/xml";
 export { natural } from "./strategies/natural";

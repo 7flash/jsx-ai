@@ -1,9 +1,12 @@
 // ── Custom JSX Runtime for jsx-ai ──
 // This replaces React's createElement — every supported intrinsic tag becomes a JsxAiNode.
 
-import { jsonObject, record } from "./internal/json";
+import { jsonObject, jsonValue, record } from "./internal/json";
+import { normalizeJsonSchema, normalizeToolParametersSchema } from "./ir";
 import type {
   JsxAiNode,
+  JsonSchemaType,
+  JsonValue,
   MessageNode,
   ParamNode,
   PromptNode,
@@ -67,11 +70,16 @@ function toolNode(
   props: Record<string, unknown>,
   children: JsxAiNode | JsxAiNode[] | undefined,
 ): ToolNode {
+  const schema =
+    props.schema === undefined
+      ? undefined
+      : normalizeToolParametersSchema(props.schema, "<tool> schema");
   return {
     type: "tool",
     props: {
       name: requiredString(props.name, "tool", "name"),
       description: requiredString(props.description, "tool", "description"),
+      ...(schema ? { schema } : {}),
       children,
     },
   };
@@ -81,17 +89,23 @@ function paramNode(
   props: Record<string, unknown>,
   children: JsxAiNode | JsxAiNode[] | undefined,
 ): ParamNode {
+  const type = optionalSchemaType(props.type, "param", "type");
   const enumValues =
     props.enum === undefined
       ? undefined
-      : stringArray(props.enum, "param", "enum");
+      : jsonArray(props.enum, "<param> enum");
+  const schema =
+    props.schema === undefined
+      ? undefined
+      : normalizeJsonSchema(props.schema, "<param> schema");
   return {
     type: "param",
     props: {
       name: requiredString(props.name, "param", "name"),
-      ...(typeof props.type === "string" ? { type: props.type } : {}),
+      ...(type ? { type } : {}),
       ...(props.required === true ? { required: true } : {}),
       ...(enumValues ? { enum: enumValues } : {}),
+      ...(schema ? { schema } : {}),
       ...(extractText(children) !== undefined
         ? { children: extractText(children) }
         : {}),
@@ -164,14 +178,34 @@ function requiredString(value: unknown, tag: string, prop: string): string {
   return value;
 }
 
-function stringArray(value: unknown, tag: string, prop: string): string[] {
+const JSON_SCHEMA_TYPES = new Set<JsonSchemaType>([
+  "null",
+  "boolean",
+  "object",
+  "array",
+  "number",
+  "integer",
+  "string",
+]);
+
+function optionalSchemaType(
+  value: unknown,
+  tag: string,
+  prop: string,
+): JsonSchemaType | undefined {
+  if (value === undefined) return undefined;
   if (
-    !Array.isArray(value) ||
-    !value.every((item) => typeof item === "string")
+    typeof value !== "string" ||
+    !JSON_SCHEMA_TYPES.has(value as JsonSchemaType)
   ) {
-    throw new TypeError(`<${tag}> ${prop} must be a string array`);
+    throw new TypeError(`<${tag}> ${prop} must be a valid JSON Schema type`);
   }
-  return value;
+  return value as JsonSchemaType;
+}
+
+function jsonArray(value: unknown, context: string): JsonValue[] {
+  if (!Array.isArray(value)) throw new TypeError(`${context} must be an array`);
+  return value.map((item, index) => jsonValue(item, `${context}[${index}]`));
 }
 
 function toolCallArray(value: unknown): ToolCall[] {
@@ -282,17 +316,23 @@ export function md(
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      tool: { name: string; description: string; children?: JsxChild };
+      tool: {
+        name: string;
+        description: string;
+        schema?: import("./types").ToolParametersSchema;
+        children?: JsxChild;
+      };
       param: {
         name: string;
-        type?: string;
+        type?: JsonSchemaType;
         required?: boolean;
-        enum?: string[];
+        enum?: readonly JsonValue[];
+        schema?: import("./types").JsonSchema;
         children?: JsxChild;
       };
       message: {
         role: "user" | "assistant" | "tool";
-        toolCalls?: ToolCall[];
+        toolCalls?: readonly ToolCall[];
         toolCallId?: string;
         toolName?: string;
         isError?: boolean;

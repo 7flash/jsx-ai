@@ -166,4 +166,33 @@ describe("runAgent", () => {
     expect(receivedSignal?.aborted).toBe(true);
     expect(result.reason).toBe("aborted");
   });
+
+  test("freezes dispatched tool arguments and converts mismatched executor history into a paired error result", async () => {
+    let argsWereFrozen = false;
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async () =>
+        response([{ name: "write_file", args: { nested: { value: 1 } } }]),
+      executeTool: (call) => {
+        argsWereFrozen =
+          Object.isFrozen(call.args) && Object.isFrozen(call.args.nested);
+        return {
+          role: "tool",
+          content: "bad pairing",
+          toolCallId: "wrong",
+          toolName: call.name,
+        };
+      },
+      maxSteps: 1,
+    });
+
+    expect(argsWereFrozen).toBe(true);
+    const assistant = result.history.find(
+      (message) => message.role === "assistant",
+    );
+    const tool = result.history.find((message) => message.role === "tool");
+    expect(tool?.isError).toBe(true);
+    expect(tool?.toolCallId).toBe(assistant?.toolCalls?.[0]?.id);
+    expect(tool?.content).toContain("expected");
+  });
 });

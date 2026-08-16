@@ -118,3 +118,63 @@ describe("native history serialization", () => {
     ).toThrow("invalid JSON");
   });
 });
+
+describe("tool schema serialization", () => {
+  const schemaPrepared: PreparedPrompt = {
+    messages: [{ role: "user", content: "create it" }],
+    nativeTools: [
+      {
+        name: "create_scene",
+        description: "Create a scene",
+        parameters: {
+          type: "object",
+          properties: {
+            camera: {
+              type: "object",
+              properties: { fov: { type: "number", minimum: 1, maximum: 179 } },
+              required: ["fov"],
+              additionalProperties: false,
+            },
+          },
+          required: ["camera"],
+          additionalProperties: false,
+        },
+      },
+    ],
+  };
+
+  test("all built-in native providers receive the same nested canonical schema", () => {
+    const openai = new OpenAIProvider().buildRequest(
+      schemaPrepared,
+      "gpt-4.1",
+      "key",
+    ).body;
+    const openaiFn = record(record(array(openai.tools)[0])?.function);
+    expect(
+      record(record(record(openaiFn?.parameters)?.properties)?.camera)?.type,
+    ).toBe("object");
+
+    const gemini = new GeminiProvider().buildRequest(
+      schemaPrepared,
+      "gemini-2.5-flash",
+      "key",
+    ).body;
+    const declaration = record(
+      array(record(array(gemini.tools)[0])?.functionDeclarations)[0],
+    );
+    expect(
+      record(record(record(declaration?.parameters)?.properties)?.camera)?.type,
+    ).toBe("object");
+
+    const anthropic = new AnthropicProvider().buildRequest(
+      schemaPrepared,
+      "claude-sonnet-4-5",
+      "key",
+    ).body;
+    const anthropicTool = record(array(anthropic.tools)[0]);
+    expect(
+      record(record(record(anthropicTool?.input_schema)?.properties)?.camera)
+        ?.type,
+    ).toBe("object");
+  });
+});

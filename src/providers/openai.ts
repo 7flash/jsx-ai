@@ -5,6 +5,7 @@ import {
   record,
   string,
 } from "../internal/json";
+import { jsonSchemaToJson, normalizePreparedPrompt } from "../ir";
 import type {
   ExtractedMessage,
   JsonObject,
@@ -131,6 +132,7 @@ export class OpenAIProvider implements Provider {
   }
 
   private toBody(prepared: PreparedPrompt, model: string): JsonObject {
+    prepared = normalizePreparedPrompt(prepared);
     const messages = prepared.messages.map((message) =>
       this.serializeMessage(message),
     );
@@ -153,7 +155,7 @@ export class OpenAIProvider implements Provider {
         function: {
           name: tool.name,
           description: tool.description,
-          parameters: tool.parameters,
+          parameters: jsonSchemaToJson(tool.parameters),
         },
       }));
       body.tool_choice = "auto";

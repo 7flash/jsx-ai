@@ -1,10 +1,64 @@
-// ── JSX-AI Node Types ──
-// The virtual tree produced by JSX before rendering to an API request.
+// ── JSX-AI public and canonical types ──
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export interface JsonObject {
   [key: string]: JsonValue;
+}
+
+export type JsonSchemaType =
+  "null" | "boolean" | "object" | "array" | "number" | "integer" | "string";
+
+/**
+ * Provider-neutral JSON Schema representation used by tool definitions.
+ *
+ * The runtime validates this subset recursively and freezes the normalized schema.
+ * It intentionally covers the portable schema keywords used by current tool APIs
+ * instead of exposing provider-specific schema extensions in the canonical IR.
+ */
+export interface JsonSchema {
+  readonly $ref?: string;
+  readonly $defs?: Readonly<Record<string, JsonSchema>>;
+  readonly title?: string;
+  readonly description?: string;
+  readonly type?: JsonSchemaType | readonly JsonSchemaType[];
+  readonly enum?: readonly JsonValue[];
+  readonly const?: JsonValue;
+  readonly default?: JsonValue;
+  readonly examples?: readonly JsonValue[];
+  readonly properties?: Readonly<Record<string, JsonSchema>>;
+  readonly required?: readonly string[];
+  readonly additionalProperties?: boolean | JsonSchema;
+  readonly patternProperties?: Readonly<Record<string, JsonSchema>>;
+  readonly propertyNames?: JsonSchema;
+  readonly dependentRequired?: Readonly<Record<string, readonly string[]>>;
+  readonly items?: JsonSchema;
+  readonly prefixItems?: readonly JsonSchema[];
+  readonly oneOf?: readonly JsonSchema[];
+  readonly anyOf?: readonly JsonSchema[];
+  readonly allOf?: readonly JsonSchema[];
+  readonly not?: JsonSchema;
+  readonly minimum?: number;
+  readonly maximum?: number;
+  readonly exclusiveMinimum?: number;
+  readonly exclusiveMaximum?: number;
+  readonly multipleOf?: number;
+  readonly minLength?: number;
+  readonly maxLength?: number;
+  readonly pattern?: string;
+  readonly format?: string;
+  readonly minItems?: number;
+  readonly maxItems?: number;
+  readonly uniqueItems?: boolean;
+  readonly minProperties?: number;
+  readonly maxProperties?: number;
+}
+
+/** Root schema accepted for an LLM tool's argument object. */
+export interface ToolParametersSchema extends JsonSchema {
+  readonly type: "object";
+  readonly properties: Readonly<Record<string, JsonSchema>>;
+  readonly required: readonly string[];
 }
 
 export type BuiltinProviderName = "gemini" | "openai" | "anthropic";
@@ -13,11 +67,16 @@ export type BuiltinStrategyName =
   "native" | "xml" | "natural" | "nlt" | "hybrid" | "auto";
 export type StrategyName = BuiltinStrategyName | (string & {});
 
+/** Raw/strategy response tool call. IDs are optional until the call enters canonical history. */
 export interface ToolCall {
-  /** Provider tool-call identifier when the protocol supplies one. */
-  id?: string;
-  name: string;
-  args: JsonObject;
+  readonly id?: string;
+  readonly name: string;
+  readonly args: JsonObject;
+}
+
+/** Canonical history always has an identifier so tool results can be paired losslessly. */
+export interface CanonicalToolCall extends ToolCall {
+  readonly id: string;
 }
 
 export type JsxAiNode =
@@ -30,164 +89,177 @@ export type JsxAiNode =
   | FragmentNode;
 
 export interface ToolNode {
-  type: "tool";
-  props: {
-    name: string;
-    description: string;
-    children?: JsxAiNode | JsxAiNode[];
+  readonly type: "tool";
+  readonly props: {
+    readonly name: string;
+    readonly description: string;
+    /** Full JSON Schema alternative to <param> shorthand. */
+    readonly schema?: ToolParametersSchema;
+    readonly children?: JsxAiNode | JsxAiNode[];
   };
 }
 
 export interface ParamNode {
-  type: "param";
-  props: {
-    name: string;
-    type?: string;
-    required?: boolean;
-    enum?: string[];
-    children?: string;
+  readonly type: "param";
+  readonly props: {
+    readonly name: string;
+    readonly type?: JsonSchemaType;
+    readonly required?: boolean;
+    readonly enum?: readonly JsonValue[];
+    /** Nested/advanced schema for this property. */
+    readonly schema?: JsonSchema;
+    readonly children?: string;
   };
 }
 
 /**
- * A message can preserve native tool history instead of flattening it to prose.
- *
- * Assistant tool call:
- *   <message role="assistant" toolCalls={result.toolCalls}>{result.text}</message>
- *
- * Tool result:
- *   <message role="tool" toolCallId={call.id} toolName={call.name}>ok</message>
+ * JSX message input. The canonical IR validates role-specific fields and pairs
+ * assistant tool calls with subsequent tool result messages.
  */
 export interface MessageNode {
-  type: "message";
-  props: {
-    role: "user" | "assistant" | "tool";
-    toolCalls?: ToolCall[];
-    toolCallId?: string;
-    toolName?: string;
-    isError?: boolean;
-    children?: JsxAiNode | JsxAiNode[] | string;
+  readonly type: "message";
+  readonly props: {
+    readonly role: "user" | "assistant" | "tool";
+    readonly toolCalls?: readonly ToolCall[];
+    readonly toolCallId?: string;
+    readonly toolName?: string;
+    readonly isError?: boolean;
+    readonly children?: JsxAiNode | JsxAiNode[] | string;
   };
 }
 
 export interface SystemNode {
-  type: "system";
-  props: {
-    children?: JsxAiNode | JsxAiNode[] | string;
-  };
+  readonly type: "system";
+  readonly props: { readonly children?: JsxAiNode | JsxAiNode[] | string };
 }
 
 export interface PromptNode {
-  type: "prompt";
-  props: {
-    model?: string;
-    provider?: ProviderName;
-    temperature?: number;
-    maxTokens?: number;
-    strategy?: StrategyName;
-    children?: JsxAiNode | JsxAiNode[];
+  readonly type: "prompt";
+  readonly props: {
+    readonly model?: string;
+    readonly provider?: ProviderName;
+    readonly temperature?: number;
+    readonly maxTokens?: number;
+    readonly strategy?: StrategyName;
+    readonly children?: JsxAiNode | JsxAiNode[];
   };
 }
 
 export interface TextNode {
-  type: "text";
-  value: string;
+  readonly type: "text";
+  readonly value: string;
 }
 
 export interface FragmentNode {
-  type: "fragment";
-  children: JsxAiNode[];
+  readonly type: "fragment";
+  readonly children: JsxAiNode[];
 }
 
 // ── Canonical prompt IR ──
 
 export interface ExtractedTool {
-  name: string;
-  description: string;
-  parameters: {
-    type: "object";
-    properties: Record<
-      string,
-      {
-        type: string;
-        description: string;
-        enum?: string[];
-      }
-    >;
-    required: string[];
-  };
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: ToolParametersSchema;
 }
 
-export interface ExtractedMessage {
-  role: "user" | "assistant" | "tool";
-  content: string;
-  /** Present on assistant messages that requested tools. */
-  toolCalls?: ToolCall[];
-  /** Present on tool result messages. Required by OpenAI/Anthropic native history. */
-  toolCallId?: string;
-  /** Tool name for tool results. Required by Gemini functionResponse history. */
-  toolName?: string;
-  isError?: boolean;
+export interface UserPromptMessage {
+  readonly role: "user";
+  readonly content: string;
+  readonly toolCalls?: never;
+  readonly toolCallId?: never;
+  readonly toolName?: never;
+  readonly isError?: never;
 }
+
+export interface AssistantPromptMessage {
+  readonly role: "assistant";
+  readonly content: string;
+  readonly toolCalls?: readonly CanonicalToolCall[];
+  readonly toolCallId?: never;
+  readonly toolName?: never;
+  readonly isError?: never;
+}
+
+export interface ToolResultPromptMessage {
+  readonly role: "tool";
+  readonly content: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly isError?: boolean;
+  readonly toolCalls?: never;
+}
+
+export type ExtractedMessage =
+  UserPromptMessage | AssistantPromptMessage | ToolResultPromptMessage;
 
 export interface ExtractedPrompt {
-  tools: ExtractedTool[];
-  messages: ExtractedMessage[];
-  system?: string;
-  model?: string;
-  providerOverride?: ProviderName;
-  temperature?: number;
-  maxTokens?: number;
-  strategy?: StrategyName;
+  readonly tools: readonly ExtractedTool[];
+  readonly messages: readonly ExtractedMessage[];
+  readonly system?: string;
+  readonly model?: string;
+  readonly providerOverride?: ProviderName;
+  readonly temperature?: number;
+  readonly maxTokens?: number;
+  readonly strategy?: StrategyName;
 }
+
+/** Preferred semantic aliases for new code. */
+export type ToolDefinition = ExtractedTool;
+export type PromptMessage = ExtractedMessage;
+export type PromptIR = ExtractedPrompt;
 
 // ── Provider-agnostic prepared prompt ──
 
 export interface PreparedPrompt {
-  system?: string;
-  messages: ExtractedMessage[];
+  readonly system?: string;
+  readonly messages: readonly ExtractedMessage[];
   /** Structured tool declarations for native FC strategies (native, hybrid). */
-  nativeTools?: ExtractedTool[];
-  temperature?: number;
-  maxTokens?: number;
+  readonly nativeTools?: readonly ExtractedTool[];
+  readonly temperature?: number;
+  readonly maxTokens?: number;
 }
 
 // ── LLM response types ──
 
 export interface ProviderResponse {
-  text: string;
-  nativeToolCalls: ToolCall[];
-  raw: unknown;
-  finishReason?: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    thinkingTokens?: number;
+  readonly text: string;
+  readonly nativeToolCalls: readonly ToolCall[];
+  readonly raw: unknown;
+  readonly finishReason?: string;
+  readonly usage?: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly thinkingTokens?: number;
   };
 }
 
 export interface LLMResponse {
-  text: string;
-  toolCalls: ToolCall[];
-  raw: unknown;
+  readonly text: string;
+  readonly toolCalls: readonly ToolCall[];
+  readonly raw: unknown;
   /** Canonical request data is included so logs do not need provider-specific introspection. */
-  request?: { url: string; body: JsonObject; prepared: PreparedPrompt };
-  finishReason?: string;
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    thinkingTokens?: number;
+  readonly request?: {
+    readonly url: string;
+    readonly body: JsonObject;
+    readonly prepared: PreparedPrompt;
+  };
+  readonly finishReason?: string;
+  readonly usage?: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly thinkingTokens?: number;
   };
 }
 
 // ── Strategy interface ──
 
 export interface RenderStrategy {
-  name: string;
+  readonly name: string;
   prepare(prompt: ExtractedPrompt): PreparedPrompt;
   /** The canonical prompt is supplied for parsers that need declared tool metadata. */
   parseResponse(
     response: ProviderResponse,
     prompt?: ExtractedPrompt,
-  ): { text: string; toolCalls: ToolCall[] };
+  ): { text: string; toolCalls: readonly ToolCall[] };
 }

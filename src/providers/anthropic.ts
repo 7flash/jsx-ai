@@ -1,4 +1,5 @@
 import { array, jsonObject, number, record, string } from "../internal/json";
+import { jsonSchemaToJson, normalizePreparedPrompt } from "../ir";
 import type {
   ExtractedMessage,
   JsonObject,
@@ -132,6 +133,7 @@ export class AnthropicProvider implements Provider {
   }
 
   private toBody(prepared: PreparedPrompt, model: string): JsonObject {
+    prepared = normalizePreparedPrompt(prepared);
     // Anthropic requires alternating roles. Merge consecutive same-role messages,
     // including user tool_result blocks following ordinary user content.
     const messages: AnthropicMessage[] = [];
@@ -157,7 +159,7 @@ export class AnthropicProvider implements Provider {
       body.tools = prepared.nativeTools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.parameters,
+        input_schema: jsonSchemaToJson(tool.parameters),
       }));
     }
     return body;

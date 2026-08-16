@@ -1,23 +1,38 @@
 // ── Tree Renderer ──
-// Walks the JSX virtual tree and extracts the canonical prompt IR.
+// Walks the JSX virtual tree, then normalizes it through the canonical IR boundary.
 
+import {
+  normalizeJsonSchema,
+  normalizePromptIR,
+  normalizeToolParametersSchema,
+  type PromptMessageInput,
+} from "./ir";
 import type {
-  JsxAiNode,
-  ParamNode,
   ExtractedPrompt,
   ExtractedTool,
-  ExtractedMessage,
+  JsonSchema,
+  JsxAiNode,
+  ParamNode,
 } from "./types";
 
-export function extract(node: JsxAiNode): ExtractedPrompt {
-  const result: ExtractedPrompt = { tools: [], messages: [] };
-  walk(node, result);
-  return result;
+interface PromptDraft {
+  tools: ExtractedTool[];
+  messages: PromptMessageInput[];
+  system?: string;
+  model?: string;
+  providerOverride?: ExtractedPrompt["providerOverride"];
+  temperature?: number;
+  maxTokens?: number;
+  strategy?: ExtractedPrompt["strategy"];
 }
 
-function walk(node: JsxAiNode, result: ExtractedPrompt): void {
-  if (!node) return;
+export function extract(node: JsxAiNode): ExtractedPrompt {
+  const result: PromptDraft = { tools: [], messages: [] };
+  walk(node, result);
+  return normalizePromptIR(result);
+}
 
+function walk(node: JsxAiNode, result: PromptDraft): void {
   switch (node.type) {
     case "prompt":
       if (node.props.model) result.model = node.props.model;
@@ -39,7 +54,7 @@ function walk(node: JsxAiNode, result: ExtractedPrompt): void {
 
     case "system": {
       const text = collectText(node.props.children);
-      result.system = result.system ? result.system + "\n\n" + text : text;
+      result.system = result.system ? `${result.system}\n\n${text}` : text;
       break;
     }
 
@@ -48,18 +63,18 @@ function walk(node: JsxAiNode, result: ExtractedPrompt): void {
       break;
 
     case "text":
-      // Top-level text is ignored: it must be inside message/system.
+      // Top-level text is intentionally ignored: it must be inside message/system.
       break;
 
     case "param":
-      // Params are handled by extractTool.
+      // Params are meaningful only inside <tool> and are consumed by extractTool.
       break;
   }
 }
 
 function walkChildren(
   children: JsxAiNode | JsxAiNode[] | undefined,
-  result: ExtractedPrompt,
+  result: PromptDraft,
 ): void {
   if (!children) return;
   if (Array.isArray(children))
@@ -67,35 +82,73 @@ function walkChildren(
   else walk(children, result);
 }
 
-function extractTool(node: JsxAiNode & { type: "tool" }): ExtractedTool {
-  const properties: Record<
-    string,
-    { type: string; description: string; enum?: string[] }
-  > = {};
-  const required: string[] = [];
-  const paramNodes = collectParamNodes(node.props.children);
+function parameterSchema(param: ParamNode, context: string): JsonSchema {
+  const description = param.props.children?.trim();
+  if (param.props.schema) {
+    const schema = normalizeJsonSchema(param.props.schema, `${context}.schema`);
+    return description && !schema.description
+      ? normalizeJsonSchema({ ...schema, description }, `${context}.schema`)
+      : schema;
+  }
 
-  for (const param of paramNodes) {
-    const p = param.props;
-    const entry: { type: string; description: string; enum?: string[] } = {
-      type: p.type || "string",
-      description: p.children || "",
+  return normalizeJsonSchema(
+    {
+      type: param.props.type ?? "string",
+      ...(description ? { description } : {}),
+      ...(param.props.enum?.length ? { enum: param.props.enum } : {}),
+    },
+    context,
+  );
+}
+
+function extractTool(node: JsxAiNode & { type: "tool" }): ExtractedTool {
+  const paramNodes = collectParamNodes(node.props.children);
+  if (node.props.schema && paramNodes.length) {
+    throw new TypeError(
+      `<tool name=${JSON.stringify(node.props.name)}> cannot combine schema with <param> children`,
+    );
+  }
+
+  if (node.props.schema) {
+    return {
+      name: node.props.name,
+      description: node.props.description,
+      parameters: normalizeToolParametersSchema(
+        node.props.schema,
+        `tool ${JSON.stringify(node.props.name)} schema`,
+      ),
     };
-    if (p.enum) entry.enum = p.enum;
-    properties[p.name] = entry;
-    if (p.required) required.push(p.name);
+  }
+
+  const properties: Record<string, JsonSchema> = {};
+  const required: string[] = [];
+  for (let index = 0; index < paramNodes.length; index++) {
+    const param = paramNodes[index];
+    if (Object.hasOwn(properties, param.props.name)) {
+      throw new TypeError(
+        `<tool name=${JSON.stringify(node.props.name)}> contains duplicate param ${JSON.stringify(param.props.name)}`,
+      );
+    }
+    properties[param.props.name] = parameterSchema(
+      param,
+      `tool ${JSON.stringify(node.props.name)} param ${JSON.stringify(param.props.name)}`,
+    );
+    if (param.props.required) required.push(param.props.name);
   }
 
   return {
     name: node.props.name,
     description: node.props.description,
-    parameters: { type: "object", properties, required },
+    parameters: normalizeToolParametersSchema(
+      { type: "object", properties, required },
+      `tool ${JSON.stringify(node.props.name)} schema`,
+    ),
   };
 }
 
 function extractMessage(
   node: JsxAiNode & { type: "message" },
-): ExtractedMessage {
+): PromptMessageInput {
   return {
     role: node.props.role,
     content: collectText(node.props.children),

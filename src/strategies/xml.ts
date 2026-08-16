@@ -1,3 +1,4 @@
+import { schemaTypeLabel } from "../ir";
 import type {
   ExtractedMessage,
   ExtractedPrompt,
@@ -59,10 +60,10 @@ export function buildXMLDocument(prompt: ExtractedPrompt): string {
           ? ` required="true"`
           : "";
         const enumAttr = p.enum?.length
-          ? ` enum="${escapeXml(p.enum.join(","))}"`
+          ? ` enum="${escapeXml(p.enum.map((value) => JSON.stringify(value)).join(","))}"`
           : "";
         parts.push(
-          `      <param name="${escapeXml(name)}" type="${escapeXml(p.type)}"${required}${enumAttr}>${escapeXml(p.description)}</param>`,
+          `      <param name="${escapeXml(name)}" type="${escapeXml(schemaTypeLabel(p))}"${required}${enumAttr}>${escapeXml(p.description ?? "")}</param>`,
         );
       }
       parts.push("    </tool>");

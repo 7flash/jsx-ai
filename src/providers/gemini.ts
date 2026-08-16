@@ -6,6 +6,7 @@ import {
   record,
   string,
 } from "../internal/json";
+import { jsonSchemaToJson, normalizePreparedPrompt } from "../ir";
 import type {
   ExtractedMessage,
   JsonObject,
@@ -139,6 +140,7 @@ export class GeminiProvider implements Provider {
   }
 
   private toBody(prepared: PreparedPrompt): JsonObject {
+    prepared = normalizePreparedPrompt(prepared);
     // Gemini rejects consecutive same-role messages. Merge while preserving structured parts.
     const contents: GeminiContent[] = [];
     for (const message of prepared.messages) {
@@ -166,7 +168,7 @@ export class GeminiProvider implements Provider {
           functionDeclarations: prepared.nativeTools.map((tool) => ({
             name: tool.name,
             description: tool.description,
-            parameters: tool.parameters,
+            parameters: jsonSchemaToJson(tool.parameters),
           })),
         },
       ];

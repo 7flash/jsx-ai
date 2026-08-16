@@ -31,6 +31,7 @@ import type {
 } from "./types";
 import type { Provider, ProviderRequest } from "./providers/provider";
 import { extract } from "./render";
+import { normalizePreparedPrompt, normalizePromptIR } from "./ir";
 
 export type { LLMResponse, RequestOptions };
 export { listProviders, listStrategies, registerProvider, registerStrategy };
@@ -138,7 +139,7 @@ function withCallOverrides(
   prompt: ExtractedPrompt,
   options?: CallOptions,
 ): ExtractedPrompt {
-  return {
+  return normalizePromptIR({
     ...prompt,
     ...(options?.model !== undefined ? { model: options.model } : {}),
     ...(options?.temperature !== undefined
@@ -147,7 +148,7 @@ function withCallOverrides(
     ...(options?.maxTokens !== undefined
       ? { maxTokens: options.maxTokens }
       : {}),
-  };
+  });
 }
 
 function resolveCall(tree: JsxAiNode, options?: CallOptions): ResolvedCall {
@@ -159,7 +160,7 @@ function resolveCall(tree: JsxAiNode, options?: CallOptions): ResolvedCall {
     options?.provider ?? prompt.providerOverride,
   );
   const apiKey = resolveApiKey(provider, options);
-  const prepared = strategy.prepare(prompt);
+  const prepared = normalizePreparedPrompt(strategy.prepare(prompt));
   return {
     prompt,
     strategy,
@@ -199,12 +200,12 @@ function textPrepared(
     .map((message) => ({ role: message.role, content: message.content }));
 
   return {
-    prepared: {
+    prepared: normalizePreparedPrompt({
       system: system || undefined,
       messages: telemetryMessages,
       temperature,
       maxTokens,
-    },
+    }),
     telemetryMessages,
     system: system || undefined,
   };

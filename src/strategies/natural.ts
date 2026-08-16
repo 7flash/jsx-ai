@@ -1,3 +1,4 @@
+import { schemaTypeLabel } from "../ir";
 import type { ExtractedPrompt, RenderStrategy, ToolCall } from "../types";
 import { textProtocolMessages } from "../message";
 import { parseTextParams } from "./text-params";
@@ -9,7 +10,7 @@ function toolsToNaturalLanguage(tools: ExtractedPrompt["tools"]): string {
       const params = Object.entries(t.parameters.properties)
         .map(
           ([name, p]) =>
-            `  - ${name}${t.parameters.required.includes(name) ? "" : " (optional)"}: ${p.description}`,
+            `  - ${name}${t.parameters.required.includes(name) ? "" : " (optional)"} [${schemaTypeLabel(p)}]: ${p.description ?? ""}`,
         )
         .join("\n");
       return `• ${t.name} — ${t.description}\n  Parameters:\n${params}`;
