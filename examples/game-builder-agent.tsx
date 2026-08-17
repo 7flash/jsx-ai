@@ -1,13 +1,19 @@
 #!/usr/bin/env bun
+// @jsxImportSource jsx-ai
 /**
- * Iterative game-building agent.
+ * Observable iterative game-building agent.
  *
  * Phase 1: creates a playable HTML5 Canvas game.
  * Phase 2: reads the result and improves mechanics/polish.
  * Phase 3: rewrites the renderer with Three.js while preserving gameplay.
  *
+ * The jsx-ai core stays silent. This example deliberately owns presentation and
+ * uses measure-fn for hierarchical timings plus explicit token/tool/file summaries.
+ *
  * Run:
- *   GAME_MODEL=gemini-2.5-flash bun run examples/game-builder-agent.tsx ./game-output
+ *   bun run examples/game-builder-agent.tsx ./game-output
+ *   JSX_AI_RUNTIME=codex bun run examples/game-builder-agent.tsx ./game-output
+ *   JSX_AI_RUNTIME=api JSX_AI_MODEL=gemini-3-flash-preview bun run examples/game-builder-agent.tsx ./game-output
  */
 
 import {
@@ -18,13 +24,73 @@ import {
   writeFileSync,
 } from "fs";
 import { dirname, relative, resolve } from "path";
-import { md, runAgent } from "../src/index";
-import type { CanonicalToolCall, ExtractedMessage } from "../src/index";
+import { callLLM, md, runAgent } from "../src/index";
+import type {
+  AgentRunResult,
+  AgentUsage,
+  CanonicalToolCall,
+  ExtractedMessage,
+} from "../src/index";
+import {
+  measure,
+  summarizeResponse,
+  summarizeToolCall,
+  truncate,
+  type MeasureFn,
+} from "./_example-observability";
 
-const MODEL = process.env.GAME_MODEL || "gemini-2.5-flash";
-const TEMPERATURE = /^gemini-3(?:\.|-|$)/i.test(MODEL) ? 1.0 : 0.2;
+const STRATEGY = "hybrid" as const;
 const ROOT = resolve(process.argv[2] || "game-output");
+const MAX_STEPS = 8;
+const MAX_TOOL_CALLS = 48;
+const MAX_PHASE_MS = 8 * 60_000;
 mkdirSync(ROOT, { recursive: true });
+
+interface PhaseSpec {
+  number: number;
+  title: string;
+  goal: string;
+}
+
+interface PhaseReport {
+  number: number;
+  title: string;
+  result: AgentRunResult<undefined>;
+}
+
+const PHASES: readonly PhaseSpec[] = [
+  {
+    number: 1,
+    title: "Build Canvas game",
+    goal: md`
+      PHASE 1 — BUILD THE GAME.
+      Create a complete, fun arcade game using plain HTML/CSS/JavaScript and the HTML5 Canvas 2D API.
+      Requirements: keyboard controls, score, restart flow, increasing challenge, clear visual feedback,
+      and no build step. Keep external dependencies at zero. Create all required files.
+    `,
+  },
+  {
+    number: 2,
+    title: "Improve gameplay and polish",
+    goal: md`
+      PHASE 2 — ITERATE ON THE EXISTING CANVAS GAME.
+      Inspect the files you built and substantially improve the game rather than merely restyling it.
+      Improve game feel, progression, feedback, UI, effects, and code organization while keeping it playable.
+      Preserve the strongest mechanics from phase 1 and fix any obvious implementation weaknesses.
+    `,
+  },
+  {
+    number: 3,
+    title: "Migrate renderer to Three.js",
+    goal: md`
+      PHASE 3 — REWRITE THE PRESENTATION WITH THREE.JS.
+      Inspect the current project, then migrate the visual renderer from Canvas 2D to Three.js using an ES-module CDN import
+      so the project still has no package-install/build step. Preserve and improve the gameplay/state logic from the previous
+      phases. Use real 3D scene/camera/lighting/geometry where it improves the experience, keep responsive controls/UI,
+      and leave the project in a coherent runnable final state. Remove obsolete Canvas-2D rendering code where appropriate.
+    `,
+  },
+];
 
 const WriteFileTool = () => (
   <tool
@@ -87,16 +153,24 @@ function listFiles(dir = ROOT): string[] {
   return result.sort();
 }
 
+function fileManifest(): Array<{ file: string; bytes: number }> {
+  return listFiles().map((file) => ({
+    file,
+    bytes: statSync(safePath(file)).size,
+  }));
+}
+
 function executeTool(call: CanonicalToolCall): ExtractedMessage {
   try {
     switch (call.name) {
       case "write_file": {
         const path = safePath(String(call.args.path || ""));
+        const content = String(call.args.content || "");
         mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, String(call.args.content || ""), "utf-8");
+        writeFileSync(path, content, "utf-8");
         return toolResult(
           call,
-          `Wrote ${relative(ROOT, path)} (${String(call.args.content || "").length} chars).`,
+          `Wrote ${relative(ROOT, path)} (${content.length} chars).`,
         );
       }
       case "read_file": {
@@ -104,7 +178,7 @@ function executeTool(call: CanonicalToolCall): ExtractedMessage {
         return toolResult(call, readFileSync(path, "utf-8"));
       }
       case "list_files":
-        return toolResult(call, JSON.stringify(listFiles(), null, 2));
+        return toolResult(call, JSON.stringify(fileManifest(), null, 2));
       case "phase_done":
         return toolResult(
           call,
@@ -138,12 +212,7 @@ function toolResult(
 
 function promptTree(history: readonly ExtractedMessage[]) {
   return (
-    <prompt
-      model={MODEL}
-      strategy="hybrid"
-      temperature={TEMPERATURE}
-      maxTokens={14000}
-    >
+    <prompt strategy={STRATEGY} maxTokens={14000}>
       <system>{md`
         You are an autonomous browser-game engineer working in a real project directory.
         Use the file tools to inspect and modify the project. Prefer a small coherent codebase.
@@ -170,82 +239,192 @@ function promptTree(history: readonly ExtractedMessage[]) {
   );
 }
 
-async function runPhase(
-  history: ExtractedMessage[],
-  goal: string,
-  maxSteps = 8,
-): Promise<ExtractedMessage[]> {
-  const result = await runAgent({
-    history: [...history, { role: "user", content: goal }],
-    buildPrompt: (phaseHistory) => promptTree(phaseHistory),
-    executeTool,
-    callOptions: {
-      model: MODEL,
-      strategy: "hybrid",
-      retries: 3,
-      timeoutMs: 90_000,
-    },
-    maxSteps,
-    maxToolCalls: 48,
-    maxDurationMs: 8 * 60_000,
-    isComplete: (response) =>
-      response.toolCalls.some((call) => call.name === "phase_done"),
-    onNoToolCalls: () =>
-      "Continue by using the available tools. Call phase_done only after the phase is implemented.",
-    onEvent: (event) => {
-      if (event.type === "model_end") {
-        const names =
-          event.response.toolCalls.map((call) => call.name).join(", ") ||
-          "no tools";
-        console.log(`  model step ${event.context.step + 1}: ${names}`);
-      }
-    },
-  });
-
-  if (result.reason !== "completed") {
-    throw new Error(
-      `Phase stopped with ${result.reason} after ${result.steps.length} model steps`,
-    );
-  }
-  return result.history;
+function summarizeToolResult(
+  message: ExtractedMessage,
+): Record<string, unknown> {
+  if (message.role !== "tool") return { role: message.role };
+  return {
+    tool: message.toolName,
+    error: message.isError ?? false,
+    resultChars: message.content.length,
+    preview: truncate(message.content.replace(/\s+/g, " "), 150),
+  };
 }
 
-let history: ExtractedMessage[] = [];
+function summarizeAgentResult(
+  result: AgentRunResult<undefined>,
+): Record<string, unknown> {
+  return {
+    reason: result.reason,
+    modelSteps: result.steps.length,
+    toolCalls: result.toolCallsExecuted,
+    elapsedMs: result.elapsedMs,
+    tokens: result.usage,
+    files: fileManifest(),
+  };
+}
 
-history = await runPhase(
-  history,
-  md`
-    PHASE 1 — BUILD THE GAME.
-    Create a complete, fun arcade game using plain HTML/CSS/JavaScript and the HTML5 Canvas 2D API.
-    Requirements: keyboard controls, score, restart flow, increasing challenge, clear visual feedback,
-    and no build step. Keep external dependencies at zero. Create all required files.
-  `,
-);
+function addUsage(target: AgentUsage, usage: AgentUsage): void {
+  target.inputTokens += usage.inputTokens;
+  target.outputTokens += usage.outputTokens;
+  target.thinkingTokens += usage.thinkingTokens;
+}
 
-history = await runPhase(
-  history,
-  md`
-    PHASE 2 — ITERATE ON THE EXISTING CANVAS GAME.
-    Inspect the files you built and substantially improve the game rather than merely restyling it.
-    Improve game feel, progression, feedback, UI, effects, and code organization while keeping it playable.
-    Preserve the strongest mechanics from phase 1 and fix any obvious implementation weaknesses.
-  `,
-);
+async function runPhase(
+  trace: MeasureFn,
+  history: readonly ExtractedMessage[],
+  phase: PhaseSpec,
+): Promise<AgentRunResult<undefined>> {
+  const measured = await trace(
+    {
+      label: `Phase ${phase.number} — ${phase.title}`,
+      phase: phase.number,
+      maxSteps: MAX_STEPS,
+      maxToolCalls: MAX_TOOL_CALLS,
+      result: summarizeAgentResult,
+    },
+    async (phaseTrace: MeasureFn) => {
+      let modelStep = 0;
+      const measuredCall: typeof callLLM = async (tree, options) => {
+        const step = ++modelStep;
+        const response = await phaseTrace(
+          {
+            label: `Model step ${step}`,
+            step,
+            strategy: options?.strategy ?? STRATEGY,
+            result: summarizeResponse,
+          },
+          () => callLLM(tree, options),
+        );
 
-history = await runPhase(
-  history,
-  md`
-    PHASE 3 — REWRITE THE PRESENTATION WITH THREE.JS.
-    Inspect the current project, then migrate the visual renderer from Canvas 2D to Three.js using an ES-module CDN import
-    so the project still has no package-install/build step. Preserve and improve the gameplay/state logic from the previous
-    phases. Use real 3D scene/camera/lighting/geometry where it improves the experience, keep responsive controls/UI,
-    and leave the project in a coherent runnable final state. Remove obsolete Canvas-2D rendering code where appropriate.
-  `,
-);
+        if (response === null)
+          throw new Error(
+            `Model step ${step} failed; see the measure-fn trace above.`,
+          );
+        return response;
+      };
 
-console.log(`Game project complete: ${ROOT}`);
+      const result = await runAgent({
+        history: [...history, { role: "user", content: phase.goal }],
+        buildPrompt: (phaseHistory) => promptTree(phaseHistory),
+        executeTool: async (call) => {
+          const tool = await phaseTrace(
+            {
+              label: `Tool — ${call.name}`,
+              step: modelStep,
+              ...summarizeToolCall(call),
+              result: summarizeToolResult,
+            },
+            async () => executeTool(call),
+          );
+          if (tool === null)
+            throw new Error(
+              `Tool ${call.name} failed inside the example trace.`,
+            );
+          return tool;
+        },
+        call: measuredCall,
+        maxSteps: MAX_STEPS,
+        maxToolCalls: MAX_TOOL_CALLS,
+        maxDurationMs: MAX_PHASE_MS,
+        isComplete: (response) =>
+          response.toolCalls.some((call) => call.name === "phase_done"),
+        onNoToolCalls: (response) =>
+          response.text.trim()
+            ? "Continue by using the available tools. Call phase_done only after the phase is implemented."
+            : "Use the available tools to continue the phase. Call phase_done only when implementation is complete.",
+      });
+
+      if (result.reason !== "completed") {
+        throw new Error(
+          `Phase stopped with ${result.reason} after ${result.steps.length} model step(s).`,
+        );
+      }
+      return result;
+    },
+  );
+
+  if (measured === null)
+    throw new Error(`Phase ${phase.number} failed; see the trace above.`);
+  return measured;
+}
+
+function printFinalSummary(
+  reports: readonly PhaseReport[],
+  totalUsage: AgentUsage,
+  elapsedMs: number,
+): void {
+  const totalTokens =
+    totalUsage.inputTokens +
+    totalUsage.outputTokens +
+    totalUsage.thinkingTokens;
+  console.log("\nRun summary");
+  console.table(
+    reports.map((report) => ({
+      phase: report.number,
+      name: report.title,
+      steps: report.result.steps.length,
+      tools: report.result.toolCallsExecuted,
+      inputTokens: report.result.usage.inputTokens,
+      outputTokens: report.result.usage.outputTokens,
+      thinkingTokens: report.result.usage.thinkingTokens,
+      elapsedMs: report.result.elapsedMs,
+    })),
+  );
+  console.log(
+    `Total tokens: ${totalUsage.inputTokens} input + ${totalUsage.outputTokens} output` +
+      (totalUsage.thinkingTokens
+        ? ` + ${totalUsage.thinkingTokens} thinking`
+        : "") +
+      ` = ${totalTokens}`,
+  );
+  console.log(`Total elapsed: ${(elapsedMs / 1000).toFixed(1)}s`);
+  console.log(`Output directory: ${ROOT}`);
+  console.log("\nGenerated files");
+  console.table(fileManifest());
+}
+
 console.log(
-  listFiles()
-    .map((file) => `  ${file}`)
-    .join("\n"),
+  [
+    "jsx-ai game builder",
+    "runtime/model: resolved by jsx-ai (JSX_AI_RUNTIME / JSX_AI_MODEL)",
+    `strategy: ${STRATEGY} (API runtime; Codex uses its structured bridge)`,
+    `output: ${ROOT}`,
+    `budgets: ${MAX_STEPS} model steps / ${MAX_TOOL_CALLS} tool calls / ${MAX_PHASE_MS / 60_000} min per phase`,
+  ].join("\n"),
 );
+console.log();
+
+const runStartedAt = Date.now();
+const reports: PhaseReport[] = [];
+const totalUsage: AgentUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  thinkingTokens: 0,
+};
+let history: readonly ExtractedMessage[] = [];
+
+await measure.assert(
+  {
+    label: "Game-builder run",
+    strategy: STRATEGY,
+    phases: PHASES.length,
+    output: ROOT,
+    result: () => ({
+      phases: reports.length,
+      files: fileManifest().length,
+      tokens: totalUsage,
+    }),
+  },
+  async (trace: MeasureFn) => {
+    for (const phase of PHASES) {
+      const result = await runPhase(trace, history, phase);
+      reports.push({ number: phase.number, title: phase.title, result });
+      addUsage(totalUsage, result.usage);
+      history = result.history;
+    }
+    return reports;
+  },
+);
+
+printFinalSummary(reports, totalUsage, Date.now() - runStartedAt);

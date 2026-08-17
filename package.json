@@ -1,7 +1,7 @@
 {
   "name": "jsx-ai",
-  "version": "0.7.2",
-  "description": "Composable JSX frontend and runtime for provider-agnostic LLM prompts, tools, agents, and evaluation",
+  "version": "0.10.0",
+  "description": "Composable JSX frontend for provider-agnostic LLM prompts and agents with environment-selectable API/Codex runtimes",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -15,7 +15,11 @@
     "typecheck": "tsc --noEmit",
     "bench": "bun run bench/strategies.tsx",
     "example:game": "bun run examples/game-builder-agent.tsx",
-    "check": "tsc --noEmit && bun test"
+    "check": "tsc --noEmit && bun test",
+    "example:coding": "bun run examples/coding-agent.tsx",
+    "example:skills": "bun run examples/skills-agent.tsx",
+    "example:codex": "bun run examples/runtime-agent.tsx",
+    "example:runtime": "bun run examples/runtime-agent.tsx"
   },
   "files": [
     "src",
@@ -30,7 +34,8 @@
     "agents",
     "gemini",
     "openai",
-    "anthropic"
+    "anthropic",
+    "codex"
   ],
   "license": "MIT",
   "repository": {
@@ -41,6 +46,16 @@
   "devDependencies": {
     "@types/bun": "^1.3.9",
     "typescript": "^5.8.3",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "measure-fn": "^3.11.2",
+    "@openai/codex-sdk": "^0.145.0"
+  },
+  "peerDependencies": {
+    "@openai/codex-sdk": ">=0.145.0 <1"
+  },
+  "peerDependenciesMeta": {
+    "@openai/codex-sdk": {
+      "optional": true
+    }
   }
 }

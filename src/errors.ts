@@ -8,7 +8,9 @@ export type JsxAiErrorCode =
   | "REQUEST_TIMEOUT"
   | "NETWORK_ERROR"
   | "ABORTED"
-  | "UNSUPPORTED_CAPABILITY";
+  | "UNSUPPORTED_CAPABILITY"
+  | "MISSING_RUNTIME_DEPENDENCY"
+  | "RUNTIME_ERROR";
 
 /** Stable base error for failures originating inside jsx-ai. */
 export class JsxAiError extends Error {

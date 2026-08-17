@@ -32,13 +32,29 @@ import type {
 import type { Provider, ProviderRequest } from "./providers/provider";
 import { extract } from "./render";
 import { normalizePreparedPrompt, normalizePromptIR } from "./ir";
+import {
+  resolveRuntimeConfig,
+  type RuntimeName,
+} from "./internal/runtime-config";
+import {
+  callCodexRuntime,
+  callCodexTextRuntime,
+  type CodexRuntimeOptions,
+} from "./runtimes/codex";
 
-export type { LLMResponse, RequestOptions };
+export type { LLMResponse, RequestOptions, CodexRuntimeOptions };
 export { listProviders, listStrategies, registerProvider, registerStrategy };
+
+export type LLMRuntime = RuntimeName;
 
 export interface CallOptions extends RequestOptions {
   provider?: ProviderName;
+  /** Execution backend. Defaults to JSX_AI_RUNTIME, then "api". */
+  runtime?: LLMRuntime;
+  /** Options for runtime="codex". */
+  codex?: CodexRuntimeOptions;
   strategy?: StrategyName;
+  /** Model override. Defaults to JSX_AI_MODEL, then prompt/runtime defaults. */
   model?: string;
   temperature?: number;
   maxTokens?: number;
@@ -51,6 +67,8 @@ export interface TextMessage {
 
 export interface TextCallOptions extends RequestOptions {
   provider?: ProviderName;
+  runtime?: LLMRuntime;
+  codex?: CodexRuntimeOptions;
   temperature?: number;
   maxTokens?: number;
 }
@@ -63,6 +81,7 @@ export interface PromptEvent {
   method: "callLLM" | "callText" | "streamLLM";
   model: string;
   provider: string;
+  runtime?: LLMRuntime;
   strategy?: string;
   messages: readonly ExtractedMessage[];
   system?: string;
@@ -98,18 +117,14 @@ function generateId(): string {
   return `${Date.now()}-${++hookIdCounter}`;
 }
 
-function reportTelemetryError(error: unknown): void {
-  if (process.env.JSX_AI_DEBUG_TELEMETRY === "1") {
-    console.warn(`[jsx-ai] telemetry sink failed: ${errorMessage(error)}`);
-  }
-}
-
 function fireHooks(event: PromptEvent): void {
+  // Telemetry is deliberately isolated from the caller. Hook/sink failures never
+  // affect model execution and the core library never writes unsolicited logs.
   for (const hook of [...hooks]) {
     try {
-      void Promise.resolve(hook(event)).catch(reportTelemetryError);
-    } catch (error) {
-      reportTelemetryError(error);
+      void Promise.resolve(hook(event)).catch(() => {});
+    } catch {
+      // A telemetry observer must not change call semantics.
     }
   }
 
@@ -121,7 +136,7 @@ function fireHooks(event: PromptEvent): void {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(event),
-  }).catch(reportTelemetryError);
+  }).catch(() => {});
 }
 
 // ── Call preparation ──
@@ -138,10 +153,11 @@ interface ResolvedCall {
 function withCallOverrides(
   prompt: ExtractedPrompt,
   options?: CallOptions,
+  modelOverride?: string,
 ): ExtractedPrompt {
   return normalizePromptIR({
     ...prompt,
-    ...(options?.model !== undefined ? { model: options.model } : {}),
+    ...(modelOverride !== undefined ? { model: modelOverride } : {}),
     ...(options?.temperature !== undefined
       ? { temperature: options.temperature }
       : {}),
@@ -151,18 +167,58 @@ function withCallOverrides(
   });
 }
 
-function resolveCall(tree: JsxAiNode, options?: CallOptions): ResolvedCall {
-  const prompt = withCallOverrides(extract(tree), options);
-  const strategy = resolveStrategy(prompt, options?.strategy);
-  const model = prompt.model || "gemini-2.5-flash";
+function runtimeName(options?: { runtime?: LLMRuntime }): LLMRuntime {
+  return resolveRuntimeConfig({
+    ...(options?.runtime ? { runtime: options.runtime } : {}),
+  }).runtime;
+}
+
+function assertCodexProvider(
+  model: string | undefined,
+  override?: ProviderName,
+): void {
+  if (override !== undefined && override !== "openai") {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      `runtime="codex" requires provider="openai" when provider is explicit; received ${JSON.stringify(override)}`,
+    );
+  }
+  if (!model) return;
+  const provider = resolveProvider(model, override);
+  if (provider.name !== "openai") {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      `runtime="codex" requires an OpenAI/Codex model when model is explicit; ${JSON.stringify(model)} resolved to ${provider.name}`,
+    );
+  }
+}
+
+function codexRuntimeOptions(options?: CallOptions | TextCallOptions) {
+  return {
+    ...(options?.signal ? { signal: options.signal } : {}),
+    ...(options?.timeoutMs !== undefined
+      ? { timeoutMs: options.timeoutMs }
+      : {}),
+    ...(options?.apiKey ? { apiKey: options.apiKey } : {}),
+    ...(options?.codex ? { codex: options.codex } : {}),
+  };
+}
+
+function resolveCall(
+  prompt: ExtractedPrompt,
+  model: string,
+  options?: CallOptions,
+): ResolvedCall {
+  const normalized = withCallOverrides(prompt, options, model);
+  const strategy = resolveStrategy(normalized, options?.strategy);
   const provider = resolveProvider(
     model,
-    options?.provider ?? prompt.providerOverride,
+    options?.provider ?? normalized.providerOverride,
   );
   const apiKey = resolveApiKey(provider, options);
-  const prepared = normalizePreparedPrompt(strategy.prepare(prompt));
+  const prepared = normalizePreparedPrompt(strategy.prepare(normalized));
   return {
-    prompt,
+    prompt: normalized,
     strategy,
     provider,
     model,
@@ -248,7 +304,65 @@ export async function callLLM(
   options?: CallOptions,
 ): Promise<LLMResponse> {
   const startedAt = Date.now();
-  const resolved = resolveCall(tree, options);
+  const extracted = extract(tree);
+  const config = resolveRuntimeConfig(
+    {
+      ...(options?.runtime !== undefined ? { runtime: options.runtime } : {}),
+      ...(options?.model !== undefined ? { model: options.model } : {}),
+    },
+    extracted.model,
+  );
+
+  if (config.runtime === "codex") {
+    const prompt = withCallOverrides(extracted, options, config.model);
+    const model = config.model;
+    const modelLabel = model ?? "codex-config-default";
+    assertCodexProvider(model, options?.provider ?? prompt.providerOverride);
+    try {
+      const result = await callCodexRuntime(
+        prompt,
+        model,
+        codexRuntimeOptions(options),
+      );
+      fireHooks({
+        ...eventBase(
+          startedAt,
+          "callLLM",
+          modelLabel,
+          "openai",
+          prompt.messages,
+          prompt.system,
+        ),
+        runtime: "codex",
+        strategy: "codex-structured",
+        tools: prompt.tools.map((tool) => tool.name),
+        response: { text: result.text, toolCalls: result.toolCalls },
+        usage: result.usage,
+      });
+      return result;
+    } catch (error) {
+      fireHooks({
+        ...eventBase(
+          startedAt,
+          "callLLM",
+          modelLabel,
+          "openai",
+          prompt.messages,
+          prompt.system,
+        ),
+        runtime: "codex",
+        strategy: "codex-structured",
+        tools: prompt.tools.map((tool) => tool.name),
+        response: { text: "" },
+        error: errorMessage(error),
+      });
+      throw error;
+    }
+  }
+
+  if (!config.model)
+    throw new JsxAiError("INVALID_ARGUMENT", "API runtime requires a model");
+  const resolved = resolveCall(extracted, config.model, options);
   const { prompt, strategy, provider, model, prepared, request } = resolved;
 
   try {
@@ -280,6 +394,7 @@ export async function callLLM(
         prompt.messages,
         prompt.system,
       ),
+      runtime: "api",
       strategy: strategy.name,
       tools: prompt.tools.map((tool) => tool.name),
       response: { text, toolCalls },
@@ -296,6 +411,7 @@ export async function callLLM(
         prompt.messages,
         prompt.system,
       ),
+      runtime: "api",
       strategy: strategy.name,
       tools: prompt.tools.map((tool) => tool.name),
       response: { text: "" },
@@ -315,13 +431,66 @@ export async function callText(
   options?: TextCallOptions,
 ): Promise<string> {
   const startedAt = Date.now();
-  const provider = resolveProvider(model, options?.provider);
-  const apiKey = resolveApiKey(provider, options);
   const { prepared, telemetryMessages, system } = textPrepared(
     messages,
     options?.temperature ?? 0.3,
     options?.maxTokens ?? 8000,
   );
+
+  if (runtimeName(options) === "codex") {
+    assertCodexProvider(model, options?.provider);
+    const prompt = normalizePromptIR({
+      tools: [],
+      messages: telemetryMessages,
+      ...(system ? { system } : {}),
+      model,
+      ...(options?.temperature !== undefined
+        ? { temperature: options.temperature }
+        : {}),
+      ...(options?.maxTokens !== undefined
+        ? { maxTokens: options.maxTokens }
+        : {}),
+    });
+    try {
+      const result = await callCodexTextRuntime(
+        prompt,
+        model,
+        codexRuntimeOptions(options),
+      );
+      fireHooks({
+        ...eventBase(
+          startedAt,
+          "callText",
+          model,
+          "openai",
+          telemetryMessages,
+          system,
+        ),
+        runtime: "codex",
+        response: { text: result.text },
+        usage: result.usage,
+      });
+      return result.text;
+    } catch (error) {
+      fireHooks({
+        ...eventBase(
+          startedAt,
+          "callText",
+          model,
+          "openai",
+          telemetryMessages,
+          system,
+        ),
+        runtime: "codex",
+        response: { text: "" },
+        error: errorMessage(error),
+      });
+      throw error;
+    }
+  }
+
+  const provider = resolveProvider(model, options?.provider);
+  const apiKey = resolveApiKey(provider, options);
   const request = provider.buildRequest(prepared, model, apiKey);
 
   try {
@@ -341,6 +510,7 @@ export async function callText(
         telemetryMessages,
         system,
       ),
+      runtime: "api",
       response: { text: parsed.text },
       usage: parsed.usage,
     });
@@ -355,6 +525,7 @@ export async function callText(
         telemetryMessages,
         system,
       ),
+      runtime: "api",
       response: { text: "" },
       error: errorMessage(error),
     });
@@ -368,6 +539,12 @@ export async function* streamLLM(
   options?: TextCallOptions,
 ): AsyncGenerator<string> {
   const startedAt = Date.now();
+  if (runtimeName(options) === "codex") {
+    throw new JsxAiError(
+      "UNSUPPORTED_CAPABILITY",
+      'streamLLM does not yet expose Codex runtime event streaming; use callText/callLLM with runtime="codex"',
+    );
+  }
   const provider = resolveProvider(model, options?.provider);
   if (!provider.buildStreamRequest || !provider.parseStreamEvent) {
     throw new JsxAiError(
@@ -407,6 +584,7 @@ export async function* streamLLM(
         telemetryMessages,
         system,
       ),
+      runtime: "api",
       response: { text },
     });
   } catch (error) {
@@ -419,6 +597,7 @@ export async function* streamLLM(
         telemetryMessages,
         system,
       ),
+      runtime: "api",
       response: { text },
       error: errorMessage(error),
     });

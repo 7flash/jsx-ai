@@ -28,6 +28,8 @@ export type {
   RequestOptions,
   TextMessage,
   TextCallOptions,
+  LLMRuntime,
+  CodexRuntimeOptions,
   PromptHook,
   PromptEvent,
 } from "./llm";
@@ -99,3 +101,11 @@ export { GeminiProvider } from "./providers/gemini";
 export { OpenAIProvider } from "./providers/openai";
 export { AnthropicProvider } from "./providers/anthropic";
 export type { Provider, ProviderRequest } from "./providers/provider";
+
+export type {
+  CodexAuthMode,
+  CodexSandboxMode,
+  CodexReasoningEffort,
+  CodexWebSearchMode,
+  CodexApprovalPolicy,
+} from "./runtimes/codex";

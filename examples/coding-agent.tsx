@@ -1,11 +1,16 @@
-// ── jsx-ai example: coding agent ──
-// Demonstrates composable JSX components for LLM tool calling
-//
-// Usage: bun run examples/coding-agent.tsx
+// @jsxImportSource jsx-ai
+// jsx-ai example: one structured coding-agent model turn with observable output.
 
 import { callLLM } from "../src";
+import {
+  measure,
+  printResponseDetails,
+  summarizeResponse,
+} from "./_example-observability";
 
-// ── Reusable tool components ──
+const userRequest =
+  process.argv[2] ||
+  "Create a file called hello.ts that exports a greet function";
 
 const ExecTool = () => (
   <tool
@@ -57,8 +62,6 @@ const EditFile = () => (
   </tool>
 );
 
-// ── Composable tool set ──
-
 const CodingTools = () => (
   <>
     <ExecTool />
@@ -68,14 +71,8 @@ const CodingTools = () => (
   </>
 );
 
-// ── Build the prompt ──
-
-const userRequest =
-  process.argv[2] ||
-  "Create a file called hello.ts that exports a greet function";
-
 const prompt = (
-  <prompt model="gemini-2.5-flash" temperature={0.1}>
+  <prompt>
     <system>
       You are an autonomous coding agent. Use the available tools to accomplish
       the user's request. Be precise with file paths and command syntax.
@@ -85,4 +82,16 @@ const prompt = (
   </prompt>
 );
 
-await callLLM(prompt);
+console.log(
+  `jsx-ai coding example\nruntime/model: resolved by jsx-ai\nrequest: ${userRequest}\n`,
+);
+
+const result = await measure.assert(
+  {
+    label: "LLM call",
+    result: summarizeResponse,
+  },
+  () => callLLM(prompt),
+);
+
+printResponseDetails(result);

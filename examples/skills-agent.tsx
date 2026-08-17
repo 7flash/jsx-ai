@@ -1,12 +1,7 @@
-// ── jsx-ai example: skills-based coding agent ──
-// Demonstrates the two-phase Skill pattern:
-//   1) Discovery turn: model sees a lightweight skill catalog and can call use_skill
-//   2) Resolution turn: requested skills are expanded to full methodology
-//
-// Usage:
-//   bun run examples/skills-agent.tsx
-//   bun run examples/skills-agent.tsx "Build a tiny Bun HTTP JSON API with tests"
+// @jsxImportSource jsx-ai
+// jsx-ai example: two-phase skill discovery/resolution with measured model calls.
 
+import { resolve } from "path";
 import {
   callLLM,
   render,
@@ -16,7 +11,11 @@ import {
   md,
 } from "../src";
 import type { ToolCall } from "../src";
-import { resolve } from "path";
+import {
+  measure,
+  printResponseDetails,
+  summarizeResponse,
+} from "./_example-observability";
 
 const SKILLS_DIR = resolve(import.meta.dir, "../bench/skills");
 const SKILL_PATHS = [
@@ -79,11 +78,11 @@ function buildPrompt(
   resolvedSkillNames: string[] = [],
 ) {
   const resolved = resolveSkills(SKILL_PATHS, resolvedSkillNames);
-  const resolvedPaths = new Set(resolved.map((s) => s.path));
+  const resolvedPaths = new Set(resolved.map((skill) => skill.path));
   const hasResolvedSkills = resolved.length > 0;
 
   return (
-    <prompt model="gemini-2.5-flash" strategy="hybrid" temperature={0.1}>
+    <prompt strategy="hybrid">
       <system>{md`
         You are a coding agent that can plan work, activate skills when needed,
         and then propose concrete file edits and commands.
@@ -97,110 +96,85 @@ function buildPrompt(
       {SKILL_PATHS.map((path) => (
         <Skill path={path} resolve={resolvedPaths.has(path)} />
       ))}
-
       {!hasResolvedSkills && <UseSkillTool />}
       <SetObjectivesTool />
       <WriteFileTool />
       <ExecTool />
       <DoneTool />
 
-      {messages.map((m) => (
-        <message role={m.role}>{m.content}</message>
+      {messages.map((message) => (
+        <message role={message.role}>{message.content}</message>
       ))}
     </prompt>
   );
 }
 
-function summarizeToolCalls(toolCalls: readonly ToolCall[]) {
-  if (toolCalls.length === 0) return "(none)";
+function requestedSkillsFrom(toolCalls: readonly ToolCall[]): string[] {
   return toolCalls
-    .map((tc) => `- ${tc.name}(${JSON.stringify(tc.args)})`)
-    .join("\n");
-}
-
-function requestedSkillsFrom(
-  result: Awaited<ReturnType<typeof callLLM>>,
-): string[] {
-  return result.toolCalls
-    .filter((tc) => tc.name === "use_skill")
-    .map((tc) => String(tc.args.skill_name || "").trim())
+    .filter((call) => call.name === "use_skill")
+    .map((call) => String(call.args.skill_name || "").trim())
     .filter(Boolean);
 }
 
 const userRequest =
   process.argv[2] || "Build a tiny Bun HTTP JSON API with tests";
+console.log(
+  `jsx-ai skills example\nruntime/model: resolved by jsx-ai\nrequest: ${userRequest}\n`,
+);
 
-console.log("── Skills agent demo ──");
-console.log(`User request: ${userRequest}`);
-console.log();
-
-// Turn 1: discovery
 const turn1Prompt = buildPrompt([{ role: "user", content: userRequest }]);
+const turn1IR = render(turn1Prompt);
+console.log(
+  `Discovery prompt: ${turn1IR.tools.length} tools, ${turn1IR.messages.length} message(s), ${SKILL_PATHS.length} skill catalog entries`,
+);
 
-const turn1Extracted = render(turn1Prompt);
-console.log("Turn 1 (discovery)");
-console.log(`- system blocks: skill catalog + agent instructions`);
-console.log(`- tools: ${turn1Extracted.tools.map((t) => t.name).join(", ")}`);
-console.log(`- messages: ${turn1Extracted.messages.length}`);
-console.log();
+const turn1 = await measure.assert(
+  {
+    label: "Turn 1 — skill discovery",
+    tools: turn1IR.tools.length,
+    result: summarizeResponse,
+  },
+  () => callLLM(turn1Prompt),
+);
+printResponseDetails(turn1);
 
-const turn1 = await callLLM(turn1Prompt);
-console.log("Turn 1 result");
-if (turn1.text) console.log(`Text:\n${turn1.text}\n`);
-console.log(`Tool calls:\n${summarizeToolCalls(turn1.toolCalls)}`);
-if (turn1.usage)
-  console.log(
-    `Tokens: ${turn1.usage.inputTokens} in → ${turn1.usage.outputTokens} out`,
-  );
-console.log();
-
-const requestedSkills = requestedSkillsFrom(turn1);
-if (requestedSkills.length === 0) {
-  console.log("No skills were requested, so the demo stops after discovery.");
+const requestedSkills = requestedSkillsFrom(turn1.toolCalls);
+if (!requestedSkills.length) {
+  console.log("\nNo skills were requested; discovery is complete.");
   process.exit(0);
 }
 
-console.log(`Requested skills: ${requestedSkills.join(", ")}`);
-console.log();
-
-// Turn 2: resolution
 const resolved = resolveSkills(SKILL_PATHS, requestedSkills);
+console.log(
+  `\nResolved skills: ${resolved.map((skill) => skill.name).join(", ")}`,
+);
+
 const turn2Prompt = buildPrompt(
   [
     { role: "user", content: userRequest },
     {
       role: "assistant",
       content: md`
-            Previous turn summary:
-            ${turn1.text || "(no assistant text)"}
-
-            Tool calls:
-            ${summarizeToolCalls(turn1.toolCalls)}
+            Previous turn requested these skills: ${requestedSkills.join(", ")}.
+            Continue using the resolved methodology.
         `,
     },
     {
       role: "user",
-      content:
-        "Continue with the requested skills now resolved. Propose the first concrete implementation actions.",
+      content: "Propose the first concrete implementation actions.",
     },
   ],
   requestedSkills,
 );
+const turn2IR = render(turn2Prompt);
 
-const turn2Extracted = render(turn2Prompt);
-console.log("Turn 2 (resolved)");
-console.log(
-  `- resolved skills embedded: ${resolved.map((s) => s.name).join(", ")}`,
+const turn2 = await measure.assert(
+  {
+    label: "Turn 2 — resolved skills",
+    resolvedSkills: resolved.map((skill) => skill.name).join(","),
+    tools: turn2IR.tools.length,
+    result: summarizeResponse,
+  },
+  () => callLLM(turn2Prompt),
 );
-console.log(`- tools: ${turn2Extracted.tools.map((t) => t.name).join(", ")}`);
-console.log(`- messages: ${turn2Extracted.messages.length}`);
-console.log();
-
-const turn2 = await callLLM(turn2Prompt);
-console.log("Turn 2 result");
-if (turn2.text) console.log(`Text:\n${turn2.text}\n`);
-console.log(`Tool calls:\n${summarizeToolCalls(turn2.toolCalls)}`);
-if (turn2.usage)
-  console.log(
-    `Tokens: ${turn2.usage.inputTokens} in → ${turn2.usage.outputTokens} out`,
-  );
+printResponseDetails(turn2);
