@@ -3,6 +3,10 @@
 
 import { JsxAiError } from "./errors";
 import { errorMessage } from "./internal/errors";
+import {
+  AGENT_RUNTIME_CONTEXT,
+  type AgentRuntimeCarrier,
+} from "./internal/agent-runtime";
 import { resolveApiKey } from "./internal/auth";
 import {
   listProviders,
@@ -39,6 +43,7 @@ import {
 import {
   callCodexRuntime,
   callCodexTextRuntime,
+  streamCodexTextRuntime,
   type CodexRuntimeOptions,
 } from "./runtimes/codex";
 
@@ -68,6 +73,8 @@ export interface TextMessage {
 export interface TextCallOptions extends RequestOptions {
   provider?: ProviderName;
   runtime?: LLMRuntime;
+  /** Optional model override for the messages-first callText/streamLLM overloads. */
+  model?: string;
   codex?: CodexRuntimeOptions;
   temperature?: number;
   maxTokens?: number;
@@ -165,12 +172,6 @@ function withCallOverrides(
       ? { maxTokens: options.maxTokens }
       : {}),
   });
-}
-
-function runtimeName(options?: { runtime?: LLMRuntime }): LLMRuntime {
-  return resolveRuntimeConfig({
-    ...(options?.runtime ? { runtime: options.runtime } : {}),
-  }).runtime;
 }
 
 function assertCodexProvider(
@@ -319,10 +320,14 @@ export async function callLLM(
     const modelLabel = model ?? "codex-config-default";
     assertCodexProvider(model, options?.provider ?? prompt.providerOverride);
     try {
+      const runtimeContext = (
+        options as (CallOptions & AgentRuntimeCarrier) | undefined
+      )?.[AGENT_RUNTIME_CONTEXT];
       const result = await callCodexRuntime(
         prompt,
         model,
         codexRuntimeOptions(options),
+        runtimeContext,
       );
       fireHooks({
         ...eventBase(
@@ -360,8 +365,12 @@ export async function callLLM(
     }
   }
 
-  if (!config.model)
-    throw new JsxAiError("INVALID_ARGUMENT", "API runtime requires a model");
+  if (!config.model) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      'API runtime requires a model. Set JSX_AI_MODEL, <prompt model="...">, or callOptions.model.',
+    );
+  }
   const resolved = resolveCall(extracted, config.model, options);
   const { prompt, strategy, provider, model, prepared, request } = resolved;
 
@@ -425,32 +434,115 @@ export function render(tree: JsxAiNode): ExtractedPrompt {
   return extract(tree);
 }
 
-export async function callText(
-  model: string,
+interface ResolvedTextCallInput {
+  model?: string;
+  messages: readonly TextMessage[];
+  options?: TextCallOptions;
+}
+
+function isTextMessages(value: unknown): value is readonly TextMessage[] {
+  return Array.isArray(value);
+}
+
+function resolveTextCallInput(
+  modelOrMessages: string | readonly TextMessage[],
+  messagesOrOptions?: readonly TextMessage[] | TextCallOptions,
+  maybeOptions?: TextCallOptions,
+): ResolvedTextCallInput {
+  if (typeof modelOrMessages === "string") {
+    if (!isTextMessages(messagesOrOptions)) {
+      throw new JsxAiError(
+        "INVALID_ARGUMENT",
+        "callText/streamLLM requires a messages array after the positional model",
+      );
+    }
+    return {
+      model: modelOrMessages,
+      messages: messagesOrOptions,
+      ...(maybeOptions ? { options: maybeOptions } : {}),
+    };
+  }
+
+  const options = isTextMessages(messagesOrOptions)
+    ? undefined
+    : messagesOrOptions;
+  return {
+    messages: modelOrMessages,
+    ...(options?.model ? { model: options.model } : {}),
+    ...(options ? { options } : {}),
+  };
+}
+
+function textPromptIR(
   messages: readonly TextMessage[],
+  model: string | undefined,
   options?: TextCallOptions,
-): Promise<string> {
-  const startedAt = Date.now();
+): {
+  prompt: ExtractedPrompt;
+  prepared: PreparedPrompt;
+  telemetryMessages: ExtractedMessage[];
+  system?: string;
+} {
   const { prepared, telemetryMessages, system } = textPrepared(
     messages,
     options?.temperature ?? 0.3,
     options?.maxTokens ?? 8000,
   );
+  const prompt = normalizePromptIR({
+    tools: [],
+    messages: telemetryMessages,
+    ...(system ? { system } : {}),
+    ...(model ? { model } : {}),
+    ...(options?.temperature !== undefined
+      ? { temperature: options.temperature }
+      : {}),
+    ...(options?.maxTokens !== undefined
+      ? { maxTokens: options.maxTokens }
+      : {}),
+  });
+  return {
+    prompt,
+    prepared,
+    telemetryMessages,
+    ...(system ? { system } : {}),
+  };
+}
 
-  if (runtimeName(options) === "codex") {
+export function callText(
+  model: string,
+  messages: readonly TextMessage[],
+  options?: TextCallOptions,
+): Promise<string>;
+export function callText(
+  messages: readonly TextMessage[],
+  options?: TextCallOptions,
+): Promise<string>;
+export async function callText(
+  modelOrMessages: string | readonly TextMessage[],
+  messagesOrOptions?: readonly TextMessage[] | TextCallOptions,
+  maybeOptions?: TextCallOptions,
+): Promise<string> {
+  const startedAt = Date.now();
+  const input = resolveTextCallInput(
+    modelOrMessages,
+    messagesOrOptions,
+    maybeOptions,
+  );
+  const options = input.options;
+  const config = resolveRuntimeConfig({
+    ...(options?.runtime !== undefined ? { runtime: options.runtime } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+  });
+  const model = config.model;
+  const modelLabel = model ?? "codex-config-default";
+  const { prompt, prepared, telemetryMessages, system } = textPromptIR(
+    input.messages,
+    model,
+    options,
+  );
+
+  if (config.runtime === "codex") {
     assertCodexProvider(model, options?.provider);
-    const prompt = normalizePromptIR({
-      tools: [],
-      messages: telemetryMessages,
-      ...(system ? { system } : {}),
-      model,
-      ...(options?.temperature !== undefined
-        ? { temperature: options.temperature }
-        : {}),
-      ...(options?.maxTokens !== undefined
-        ? { maxTokens: options.maxTokens }
-        : {}),
-    });
     try {
       const result = await callCodexTextRuntime(
         prompt,
@@ -461,7 +553,7 @@ export async function callText(
         ...eventBase(
           startedAt,
           "callText",
-          model,
+          modelLabel,
           "openai",
           telemetryMessages,
           system,
@@ -476,7 +568,7 @@ export async function callText(
         ...eventBase(
           startedAt,
           "callText",
-          model,
+          modelLabel,
           "openai",
           telemetryMessages,
           system,
@@ -489,6 +581,12 @@ export async function callText(
     }
   }
 
+  if (!model) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      "API runtime requires a model. Set JSX_AI_MODEL, TextCallOptions.model, or use the positional model argument.",
+    );
+  }
   const provider = resolveProvider(model, options?.provider);
   const apiKey = resolveApiKey(provider, options);
   const request = provider.buildRequest(prepared, model, apiKey);
@@ -533,16 +631,86 @@ export async function callText(
   }
 }
 
-export async function* streamLLM(
+export function streamLLM(
   model: string,
   messages: readonly TextMessage[],
   options?: TextCallOptions,
+): AsyncGenerator<string>;
+export function streamLLM(
+  messages: readonly TextMessage[],
+  options?: TextCallOptions,
+): AsyncGenerator<string>;
+export async function* streamLLM(
+  modelOrMessages: string | readonly TextMessage[],
+  messagesOrOptions?: readonly TextMessage[] | TextCallOptions,
+  maybeOptions?: TextCallOptions,
 ): AsyncGenerator<string> {
   const startedAt = Date.now();
-  if (runtimeName(options) === "codex") {
+  const input = resolveTextCallInput(
+    modelOrMessages,
+    messagesOrOptions,
+    maybeOptions,
+  );
+  const options = input.options;
+  const config = resolveRuntimeConfig({
+    ...(options?.runtime !== undefined ? { runtime: options.runtime } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+  });
+  const model = config.model;
+  const modelLabel = model ?? "codex-config-default";
+  const { prompt, prepared, telemetryMessages, system } = textPromptIR(
+    input.messages,
+    model,
+    options,
+  );
+  let text = "";
+
+  if (config.runtime === "codex") {
+    assertCodexProvider(model, options?.provider);
+    try {
+      for await (const chunk of streamCodexTextRuntime(
+        prompt,
+        model,
+        codexRuntimeOptions(options),
+      )) {
+        text += chunk;
+        yield chunk;
+      }
+      fireHooks({
+        ...eventBase(
+          startedAt,
+          "streamLLM",
+          modelLabel,
+          "openai",
+          telemetryMessages,
+          system,
+        ),
+        runtime: "codex",
+        response: { text },
+      });
+      return;
+    } catch (error) {
+      fireHooks({
+        ...eventBase(
+          startedAt,
+          "streamLLM",
+          modelLabel,
+          "openai",
+          telemetryMessages,
+          system,
+        ),
+        runtime: "codex",
+        response: { text },
+        error: errorMessage(error),
+      });
+      throw error;
+    }
+  }
+
+  if (!model) {
     throw new JsxAiError(
-      "UNSUPPORTED_CAPABILITY",
-      'streamLLM does not yet expose Codex runtime event streaming; use callText/callLLM with runtime="codex"',
+      "INVALID_ARGUMENT",
+      "API runtime requires a model. Set JSX_AI_MODEL, TextCallOptions.model, or use the positional model argument.",
     );
   }
   const provider = resolveProvider(model, options?.provider);
@@ -553,13 +721,7 @@ export async function* streamLLM(
     );
   }
   const apiKey = resolveApiKey(provider, options);
-  const { prepared, telemetryMessages, system } = textPrepared(
-    messages,
-    options?.temperature ?? 0.3,
-    options?.maxTokens ?? 8000,
-  );
   const request = provider.buildStreamRequest(prepared, model, apiKey);
-  let text = "";
 
   try {
     const response = await requestStream(

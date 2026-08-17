@@ -1,6 +1,10 @@
-import { JsxAiError, RequestTimeoutError } from "../errors";
-import { abortReason } from "../internal/errors";
+import { JsxAiError } from "../errors";
+import {
+  addAgentRuntimeCleanup,
+  type AgentRuntimeContext,
+} from "../internal/agent-runtime";
 import { jsonSchemaToJson, normalizeToolCall } from "../ir";
+import { StructuredTextDeltaDecoder } from "../internal/structured-text-delta";
 import type {
   ExtractedMessage,
   ExtractedPrompt,
@@ -8,89 +12,40 @@ import type {
   LLMResponse,
   ToolCall,
 } from "../types";
+import {
+  CodexAppServerRuntime,
+  type CodexAppServerThread,
+  type CodexAppServerUsage,
+} from "./codex-app-server";
+import type { CodexRuntimeCallOptions } from "./codex-common";
 
-const CODEX_SDK_PACKAGE = "@openai/codex-sdk";
+export type {
+  CodexApprovalPolicy,
+  CodexAuthMode,
+  CodexReasoningEffort,
+  CodexRuntimeCallOptions,
+  CodexRuntimeOptions,
+  CodexSandboxMode,
+  CodexWebSearchMode,
+} from "./codex-common";
 
-export type CodexSandboxMode =
-  "read-only" | "workspace-write" | "danger-full-access";
-export type CodexReasoningEffort =
-  "minimal" | "low" | "medium" | "high" | "xhigh";
-export type CodexWebSearchMode = "disabled" | "cached" | "live";
-export type CodexApprovalPolicy =
-  "never" | "on-request" | "on-failure" | "untrusted";
-export type CodexAuthMode = "chatgpt" | "inherit";
+type CodexBridgeMode = "initial" | "delta" | "contract-update" | "resync";
 
-/** Options passed to the local Codex runtime when CallOptions.runtime === "codex". */
-export interface CodexRuntimeOptions {
-  /**
-   * "chatgpt" (default) removes API-key variables from the Codex child process so
-   * the saved `codex login` session is used. "inherit" passes the current process
-   * environment through unchanged.
-   */
-  auth?: CodexAuthMode;
-  /** Codex sandbox. jsx-ai defaults this adapter to read-only. */
-  sandboxMode?: CodexSandboxMode;
-  workingDirectory?: string;
-  /** Defaults to true so JSX calls also work outside Git repositories. */
-  skipGitRepoCheck?: boolean;
-  modelReasoningEffort?: CodexReasoningEffort;
-  /** Defaults to false for the model-backend adapter. */
-  networkAccessEnabled?: boolean;
-  /** Defaults to disabled for the model-backend adapter. */
-  webSearchMode?: CodexWebSearchMode;
-  /** Defaults to never; application tools remain owned by runAgent/the caller. */
-  approvalPolicy?: CodexApprovalPolicy;
-  additionalDirectories?: readonly string[];
-  /** Optional path to a specific Codex executable. Normally unnecessary. */
-  codexPathOverride?: string;
+interface CodexAgentSession {
+  readonly kind: "jsx-ai-codex-agent-session";
+  readonly configKey: string;
+  readonly runtime: CodexAppServerRuntime;
+  thread: CodexAppServerThread;
+  turn: number;
+  syncedMessages: readonly ExtractedMessage[];
+  contractKey?: string;
+  lastResponse?: { text: string; toolCalls: readonly ToolCall[] };
 }
 
-interface CodexSdkModule {
-  Codex: new (options?: CodexClientOptions) => CodexClient;
-}
-
-interface CodexClientOptions {
-  codexPathOverride?: string;
-  env?: Record<string, string>;
-}
-
-interface CodexThreadOptions {
-  model?: string;
-  sandboxMode?: CodexSandboxMode;
-  workingDirectory?: string;
-  skipGitRepoCheck?: boolean;
-  modelReasoningEffort?: CodexReasoningEffort;
-  networkAccessEnabled?: boolean;
-  webSearchMode?: CodexWebSearchMode;
-  approvalPolicy?: CodexApprovalPolicy;
-  additionalDirectories?: string[];
-}
-
-interface CodexRunOptions {
-  outputSchema?: JsonObject;
-  signal?: AbortSignal;
-}
-
-interface CodexUsage {
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
-}
-
-interface CodexTurn {
-  finalResponse: string;
-  items?: unknown[];
-  usage?: CodexUsage | null;
-}
-
-interface CodexThread {
-  readonly id?: string | null;
-  run(input: string, options?: CodexRunOptions): Promise<CodexTurn>;
-}
-
-interface CodexClient {
-  startThread(options?: CodexThreadOptions): CodexThread;
+interface CodexBridgeInput {
+  mode: CodexBridgeMode;
+  text: string;
+  messagesSent: number;
 }
 
 interface CodexStructuredCall {
@@ -98,163 +53,194 @@ interface CodexStructuredCall {
   toolCalls: Array<{ name: string; arguments_json: string }>;
 }
 
-export interface CodexRuntimeCallOptions {
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  /** Explicit API keys are intentionally rejected by the ChatGPT-authenticated Codex runtime. */
-  apiKey?: string;
-  codex?: CodexRuntimeOptions;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isCodexSdkModule(value: unknown): value is CodexSdkModule {
-  return isRecord(value) && typeof value.Codex === "function";
-}
-
-type CodexSdkLoader = () => Promise<unknown>;
-const defaultCodexSdkLoader: CodexSdkLoader = () => import(CODEX_SDK_PACKAGE);
-let codexSdkLoader: CodexSdkLoader = defaultCodexSdkLoader;
-
-/** Internal test seam; not re-exported from the package root. */
-export function __setCodexSdkLoaderForTests(loader?: CodexSdkLoader): void {
-  codexSdkLoader = loader ?? defaultCodexSdkLoader;
-}
-
-async function loadCodexSdk(): Promise<CodexSdkModule> {
-  let loaded: unknown;
-  try {
-    loaded = await codexSdkLoader();
-  } catch (cause) {
-    throw new JsxAiError(
-      "MISSING_RUNTIME_DEPENDENCY",
-      `Codex runtime requires ${CODEX_SDK_PACKAGE}. Install it with \`bun add ${CODEX_SDK_PACKAGE}\`, then run \`bunx @openai/codex login\` (or \`codex login\`) to use ChatGPT-managed Codex auth.`,
-      { cause },
-    );
-  }
-  if (!isCodexSdkModule(loaded)) {
-    throw new JsxAiError(
-      "RUNTIME_ERROR",
-      `${CODEX_SDK_PACKAGE} did not export Codex as expected`,
-    );
-  }
-  return loaded;
-}
-
-function chatGptEnvironment(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value !== "string") continue;
-    const normalizedKey = key.toUpperCase();
-    if (normalizedKey === "OPENAI_API_KEY" || normalizedKey === "CODEX_API_KEY")
-      continue;
-    env[key] = value;
-  }
-  return env;
-}
-
-function codexClientOptions(
-  options?: CodexRuntimeOptions,
-  explicitApiKey?: string,
-): CodexClientOptions {
-  const auth = options?.auth ?? "chatgpt";
-  if (explicitApiKey) {
-    throw new JsxAiError(
-      "INVALID_ARGUMENT",
-      'runtime="codex" does not accept apiKey. Use runtime="api" for explicit OpenAI API-key billing, or remove apiKey and authenticate Codex with `bunx @openai/codex login` (or `codex login`).',
-    );
-  }
-
-  const result: CodexClientOptions = {};
-  if (auth === "chatgpt") result.env = chatGptEnvironment();
-  if (options?.codexPathOverride)
-    result.codexPathOverride = options.codexPathOverride;
-  return result;
-}
-
-function threadOptions(
+function codexSessionConfigKey(
   model: string | undefined,
-  options?: CodexRuntimeOptions,
-): CodexThreadOptions {
-  return {
-    ...(model ? { model } : {}),
-    sandboxMode: options?.sandboxMode ?? "read-only",
-    ...(options?.workingDirectory
-      ? { workingDirectory: options.workingDirectory }
-      : {}),
-    skipGitRepoCheck: options?.skipGitRepoCheck ?? true,
-    ...(options?.modelReasoningEffort
-      ? { modelReasoningEffort: options.modelReasoningEffort }
-      : {}),
-    networkAccessEnabled: options?.networkAccessEnabled ?? false,
-    webSearchMode: options?.webSearchMode ?? "disabled",
-    approvalPolicy: options?.approvalPolicy ?? "never",
-    ...(options?.additionalDirectories
-      ? { additionalDirectories: [...options.additionalDirectories] }
-      : {}),
-  };
-}
-
-interface CodexOperationSignal {
-  signal?: AbortSignal;
-  timeoutSignal?: AbortSignal;
-  cleanup(): void;
-}
-
-function operationSignal(
-  timeoutMs: number | undefined,
-  external?: AbortSignal,
-): CodexOperationSignal {
-  if (timeoutMs === undefined) {
-    return { ...(external ? { signal: external } : {}), cleanup: () => {} };
-  }
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new JsxAiError(
-      "INVALID_ARGUMENT",
-      `timeoutMs must be a finite positive number; received ${timeoutMs}`,
-    );
-  }
-
-  const timeoutController = new AbortController();
-  const timer = setTimeout(
-    () => timeoutController.abort(new RequestTimeoutError(timeoutMs)),
-    timeoutMs,
-  );
-  const signal = external
-    ? AbortSignal.any([external, timeoutController.signal])
-    : timeoutController.signal;
-
-  return {
-    signal,
-    timeoutSignal: timeoutController.signal,
-    cleanup: () => clearTimeout(timer),
-  };
-}
-
-async function runCodexTurn(
-  thread: CodexThread,
-  input: string,
-  runOptions: Omit<CodexRunOptions, "signal">,
   options?: CodexRuntimeCallOptions,
-): Promise<CodexTurn> {
-  const operation = operationSignal(options?.timeoutMs, options?.signal);
-  try {
-    return await thread.run(input, {
-      ...runOptions,
-      ...(operation.signal ? { signal: operation.signal } : {}),
-    });
-  } catch (error) {
-    if (options?.signal?.aborted) throw abortReason(options.signal);
-    if (operation.timeoutSignal?.aborted) {
-      const reason = operation.timeoutSignal.reason;
-      if (reason instanceof RequestTimeoutError) throw reason;
-    }
-    throw error;
-  } finally {
-    operation.cleanup();
+): string {
+  return JSON.stringify({
+    model: model ?? null,
+    codex: options?.codex ?? null,
+    apiKey: options?.apiKey ? "explicit" : null,
+  });
+}
+
+function isCodexAgentSession(value: unknown): value is CodexAgentSession {
+  return isRecord(value) && value.kind === "jsx-ai-codex-agent-session";
+}
+
+function promptContractKey(prompt: ExtractedPrompt): string {
+  return JSON.stringify({
+    system: prompt.system ?? "",
+    applicationTools: prompt.tools.map(toolForCodex),
+  });
+}
+
+function sameMessage(left: ExtractedMessage, right: ExtractedMessage): boolean {
+  return (
+    JSON.stringify(messageForCodex(left)) ===
+    JSON.stringify(messageForCodex(right))
+  );
+}
+
+function hasMessagePrefix(
+  messages: readonly ExtractedMessage[],
+  prefix: readonly ExtractedMessage[],
+): boolean {
+  if (prefix.length > messages.length) return false;
+  for (let index = 0; index < prefix.length; index++) {
+    if (!sameMessage(messages[index]!, prefix[index]!)) return false;
   }
+  return true;
+}
+
+function sameToolRequest(
+  message: ExtractedMessage,
+  last?: { text: string; toolCalls: readonly ToolCall[] },
+): boolean {
+  if (!last || message.role !== "assistant") return false;
+  if (message.content !== last.text) return false;
+  const messageCalls = message.toolCalls ?? [];
+  if (messageCalls.length !== last.toolCalls.length) return false;
+  return messageCalls.every((call, index) => {
+    const previous = last.toolCalls[index];
+    return (
+      previous !== undefined &&
+      call.name === previous.name &&
+      JSON.stringify(call.args) === JSON.stringify(previous.args)
+    );
+  });
+}
+
+function deltaPromptText(
+  messages: readonly ExtractedMessage[],
+  contract?: JsonObject,
+): string {
+  const payload: JsonObject = {
+    ...(contract ? { updatedContract: contract } : {}),
+    newMessages: messages.map(messageForCodex),
+  };
+  return [
+    contract
+      ? "Continue the same jsx-ai agent conversation. The host application contract has changed; the updated contract below supersedes the previous one."
+      : "Continue the same jsx-ai agent conversation using only the new host messages below.",
+    "Do not perform declared application tools yourself. Return the structured assistant response required by the output schema.",
+    "Tool-result messages are observations from application tools you requested in your previous response.",
+    "Do not repeat completed host actions unless the new messages require them.",
+    "",
+    JSON.stringify(payload, null, 2),
+  ].join("\n");
+}
+
+function bridgeInput(
+  session: CodexAgentSession,
+  prompt: ExtractedPrompt,
+): CodexBridgeInput {
+  if (session.turn === 0) {
+    return {
+      mode: "initial",
+      text: canonicalPromptText(prompt),
+      messagesSent: prompt.messages.length,
+    };
+  }
+
+  if (!hasMessagePrefix(prompt.messages, session.syncedMessages)) {
+    return {
+      mode: "resync",
+      text: canonicalPromptText(prompt),
+      messagesSent: prompt.messages.length,
+    };
+  }
+
+  let delta = prompt.messages.slice(session.syncedMessages.length);
+  if (delta.length && sameToolRequest(delta[0]!, session.lastResponse)) {
+    // The native Codex thread already contains its previous assistant response.
+    // Canonical history keeps it for provider-neutral semantics, but resending
+    // it would duplicate context inside Codex.
+    delta = delta.slice(1);
+  }
+
+  const nextContractKey = promptContractKey(prompt);
+  const contractChanged = session.contractKey !== nextContractKey;
+  const contract = contractChanged
+    ? {
+        system: prompt.system ?? "",
+        applicationTools: prompt.tools.map(toolForCodex),
+      }
+    : undefined;
+
+  return {
+    mode: contractChanged ? "contract-update" : "delta",
+    text: deltaPromptText(delta, contract),
+    messagesSent: delta.length,
+  };
+}
+
+async function createCodexAgentSession(
+  model: string | undefined,
+  options?: CodexRuntimeCallOptions,
+): Promise<CodexAgentSession> {
+  const runtime = await CodexAppServerRuntime.create(options);
+  try {
+    const thread = await runtime.startThread(model, options?.codex, true);
+    return {
+      kind: "jsx-ai-codex-agent-session",
+      configKey: codexSessionConfigKey(model, options),
+      runtime,
+      thread,
+      turn: 0,
+      syncedMessages: [],
+    };
+  } catch (error) {
+    await runtime.close();
+    throw error;
+  }
+}
+
+async function codexAgentSession(
+  runtimeContext: AgentRuntimeContext | undefined,
+  model: string | undefined,
+  options?: CodexRuntimeCallOptions,
+): Promise<{ session: CodexAgentSession; owned: boolean }> {
+  const key = codexSessionConfigKey(model, options);
+  if (
+    runtimeContext &&
+    isCodexAgentSession(runtimeContext.codex) &&
+    runtimeContext.codex.configKey === key
+  ) {
+    return { session: runtimeContext.codex, owned: false };
+  }
+
+  if (runtimeContext && isCodexAgentSession(runtimeContext.codex)) {
+    await runtimeContext.codex.runtime.close();
+    runtimeContext.codex = undefined;
+  }
+
+  const session = await createCodexAgentSession(model, options);
+  if (!runtimeContext) return { session, owned: true };
+
+  runtimeContext.codex = session;
+  addAgentRuntimeCleanup(runtimeContext, () => session.runtime.close());
+  return { session, owned: false };
+}
+
+async function restartCodexThread(
+  session: CodexAgentSession,
+  model: string | undefined,
+  options?: CodexRuntimeCallOptions,
+): Promise<void> {
+  session.thread = await session.runtime.startThread(
+    model,
+    options?.codex,
+    true,
+  );
+  session.turn = 0;
+  session.syncedMessages = [];
+  session.contractKey = undefined;
+  session.lastResponse = undefined;
 }
 
 function messageForCodex(message: ExtractedMessage): JsonObject {
@@ -414,7 +400,8 @@ function jsonObjectFromString(value: string, context: string): JsonObject {
 function normalizedToolCalls(
   prompt: ExtractedPrompt,
   structured: CodexStructuredCall,
-  threadId?: string | null,
+  threadId: string,
+  turn: number,
 ): ToolCall[] {
   const declared = new Set(prompt.tools.map((tool) => tool.name));
   return structured.toolCalls.map((call, index) => {
@@ -432,72 +419,120 @@ function normalizedToolCalls(
           `Codex tool call ${call.name} arguments_json`,
         ),
       },
-      `codex_${threadId ?? "thread"}_${index}_${call.name}`,
+      `codex_${threadId}_${turn}_${index}_${call.name}`,
       `Codex runtime toolCalls[${index}]`,
     );
   });
 }
 
-function usageFromCodex(usage?: CodexUsage | null): LLMResponse["usage"] {
+function usageFromCodex(usage?: CodexAppServerUsage): LLMResponse["usage"] {
   if (!usage) return undefined;
   return {
-    inputTokens: usage.input_tokens ?? 0,
-    outputTokens: usage.output_tokens ?? 0,
-    ...(usage.reasoning_output_tokens !== undefined
-      ? { thinkingTokens: usage.reasoning_output_tokens }
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    ...(usage.reasoningOutputTokens !== undefined
+      ? { thinkingTokens: usage.reasoningOutputTokens }
       : {}),
   };
 }
 
-function runtimeError(error: unknown): never {
-  if (error instanceof JsxAiError) throw error;
-  const message = error instanceof Error ? error.message : String(error);
-  throw new JsxAiError(
-    "RUNTIME_ERROR",
-    `Codex runtime failed: ${message}. If you intended to use ChatGPT-managed auth, run \`bunx @openai/codex login\` (or \`codex login\`) first.`,
-    { cause: error },
-  );
-}
-
-/** Execute one canonical jsx-ai model step through the local Codex SDK. */
+/** Execute one canonical jsx-ai model step through a local Codex App Server. */
 export async function callCodexRuntime(
   prompt: ExtractedPrompt,
   model: string | undefined,
   options?: CodexRuntimeCallOptions,
+  runtimeContext?: AgentRuntimeContext,
 ): Promise<LLMResponse> {
+  const { session, owned } = await codexAgentSession(
+    runtimeContext,
+    model,
+    options,
+  );
   try {
-    const sdk = await loadCodexSdk();
-    const client = new sdk.Codex(
-      codexClientOptions(options?.codex, options?.apiKey),
-    );
-    const thread = client.startThread(threadOptions(model, options?.codex));
-    const promptText = canonicalPromptText(prompt);
+    let bridge = bridgeInput(session, prompt);
+
+    if (bridge.mode === "resync") {
+      // Append-only canonical history is required for safe delta turns. If a
+      // caller rewrites history inside one run, start a fresh native thread
+      // rather than duplicating an old conversation into the existing one.
+      await restartCodexThread(session, model, options);
+      bridge = {
+        mode: "resync",
+        text: canonicalPromptText(prompt),
+        messagesSent: prompt.messages.length,
+      };
+    }
+
     const schema = outputSchema(prompt);
-    const turn = await runCodexTurn(
-      thread,
-      promptText,
-      { outputSchema: schema },
-      options,
-    );
+    const turnNumber = session.turn + 1;
+    const textDecoder = new StructuredTextDeltaDecoder();
+    const turn = await session.thread.run(bridge.text, {
+      ...options,
+      outputSchema: schema,
+      onProgress: runtimeContext?.onProgress,
+      onTextDelta: runtimeContext?.onTextDelta
+        ? async (rawDelta) => {
+            const visibleDelta = textDecoder.push(rawDelta);
+            if (visibleDelta) await runtimeContext.onTextDelta?.(visibleDelta);
+          }
+        : undefined,
+    });
     const structured = parseStructuredCall(turn.finalResponse);
-    const toolCalls = normalizedToolCalls(prompt, structured, thread.id);
+
+    // Some Codex builds may expose only item/completed for structured turns.
+    // In that case, still honor the agent text callback once at turn completion.
+    if (runtimeContext?.onTextDelta && !textDecoder.text && structured.text) {
+      await runtimeContext.onTextDelta(structured.text);
+    } else if (
+      runtimeContext?.onTextDelta &&
+      structured.text.startsWith(textDecoder.text) &&
+      structured.text.length > textDecoder.text.length
+    ) {
+      await runtimeContext.onTextDelta(
+        structured.text.slice(textDecoder.text.length),
+      );
+    }
+    const toolCalls = normalizedToolCalls(
+      prompt,
+      structured,
+      session.thread.id,
+      turnNumber,
+    );
+
+    session.turn = turnNumber;
+    session.syncedMessages = prompt.messages;
+    session.contractKey = promptContractKey(prompt);
+    session.lastResponse = { text: structured.text, toolCalls };
 
     return {
       text: structured.text,
       toolCalls,
       raw: {
         runtime: "codex",
-        threadId: thread.id ?? null,
-        items: Array.isArray(turn.items) ? turn.items : [],
+        transport: "app-server",
+        threadId: session.thread.id,
+        threadTurn: turnNumber,
+        bridgeMode: bridge.mode,
+        bridgePromptChars: bridge.text.length,
+        bridgeMessagesSent: bridge.messagesSent,
+        items: turn.items,
         usage: turn.usage ?? null,
         finalResponse: turn.finalResponse,
+        stream: turn.stream,
       },
       request: {
-        url: "codex://local",
+        url: "codex://app-server",
         body: {
           runtime: "codex",
+          transport: "app-server",
           ...(model ? { model } : {}),
-          prompt: promptText,
+          threadId: session.thread.id,
+          threadTurn: turnNumber,
+          bridgeMode: bridge.mode,
+          bridgePromptChars: bridge.text.length,
+          bridgeMessagesSent: bridge.messagesSent,
+          bridgeMessagesTotal: prompt.messages.length,
+          prompt: bridge.text,
           outputSchema: schema,
         },
         prepared: {
@@ -511,8 +546,8 @@ export async function callCodexRuntime(
       finishReason: "completed",
       usage: usageFromCodex(turn.usage),
     };
-  } catch (error) {
-    runtimeError(error);
+  } finally {
+    if (owned) await session.runtime.close();
   }
 }
 
@@ -522,28 +557,28 @@ export async function callCodexTextRuntime(
   model: string | undefined,
   options?: CodexRuntimeCallOptions,
 ): Promise<LLMResponse> {
+  const runtime = await CodexAppServerRuntime.create(options);
   try {
-    const sdk = await loadCodexSdk();
-    const client = new sdk.Codex(
-      codexClientOptions(options?.codex, options?.apiKey),
-    );
-    const thread = client.startThread(threadOptions(model, options?.codex));
+    const thread = await runtime.startThread(model, options?.codex, true);
     const promptText = canonicalTextPrompt(prompt);
-    const turn = await runCodexTurn(thread, promptText, {}, options);
+    const turn = await thread.run(promptText, options);
     return {
       text: turn.finalResponse,
       toolCalls: [],
       raw: {
         runtime: "codex",
-        threadId: thread.id ?? null,
-        items: Array.isArray(turn.items) ? turn.items : [],
+        transport: "app-server",
+        threadId: thread.id,
+        items: turn.items,
         usage: turn.usage ?? null,
         finalResponse: turn.finalResponse,
+        stream: turn.stream,
       },
       request: {
-        url: "codex://local",
+        url: "codex://app-server",
         body: {
           runtime: "codex",
+          transport: "app-server",
           ...(model ? { model } : {}),
           prompt: promptText,
         },
@@ -557,7 +592,24 @@ export async function callCodexTextRuntime(
       finishReason: "completed",
       usage: usageFromCodex(turn.usage),
     };
-  } catch (error) {
-    runtimeError(error);
+  } finally {
+    await runtime.close();
+  }
+}
+
+/** Stream plain assistant text deltas through the same Codex App Server transport. */
+export async function* streamCodexTextRuntime(
+  prompt: ExtractedPrompt,
+  model: string | undefined,
+  options?: CodexRuntimeCallOptions,
+): AsyncGenerator<string> {
+  const runtime = await CodexAppServerRuntime.create(options);
+  try {
+    const thread = await runtime.startThread(model, options?.codex, true);
+    const promptText = canonicalTextPrompt(prompt);
+    for await (const chunk of thread.streamText(promptText, options))
+      yield chunk;
+  } finally {
+    await runtime.close();
   }
 }

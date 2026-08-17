@@ -1,7 +1,7 @@
 {
   "name": "jsx-ai",
-  "version": "0.10.0",
-  "description": "Composable JSX frontend for provider-agnostic LLM prompts and agents with environment-selectable API/Codex runtimes",
+  "version": "0.16.0",
+  "description": "Composable JSX for structured LLM calls, tools, and agent loops across provider APIs and Codex",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -19,7 +19,9 @@
     "example:coding": "bun run examples/coding-agent.tsx",
     "example:skills": "bun run examples/skills-agent.tsx",
     "example:codex": "bun run examples/runtime-agent.tsx",
-    "example:runtime": "bun run examples/runtime-agent.tsx"
+    "example:runtime": "bun run examples/runtime-agent.tsx",
+    "example:streaming": "bun run examples/streaming-agent.tsx",
+    "example:text-stream": "bun run examples/text-stream.ts"
   },
   "files": [
     "src",
@@ -48,13 +50,13 @@
     "typescript": "^5.8.3",
     "@types/node": "^22.0.0",
     "measure-fn": "^3.11.2",
-    "@openai/codex-sdk": "^0.145.0"
+    "@openai/codex": "^0.146.0"
   },
   "peerDependencies": {
-    "@openai/codex-sdk": ">=0.145.0 <1"
+    "@openai/codex": ">=0.145.0 <1"
   },
   "peerDependenciesMeta": {
-    "@openai/codex-sdk": {
+    "@openai/codex": {
       "optional": true
     }
   }

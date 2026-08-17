@@ -13,7 +13,7 @@
  * Run:
  *   bun run examples/game-builder-agent.tsx ./game-output
  *   JSX_AI_RUNTIME=codex bun run examples/game-builder-agent.tsx ./game-output
- *   JSX_AI_RUNTIME=api JSX_AI_MODEL=gemini-3-flash-preview bun run examples/game-builder-agent.tsx ./game-output
+ *   JSX_AI_RUNTIME=api JSX_AI_MODEL=<provider-model> bun run examples/game-builder-agent.tsx ./game-output
  */
 
 import {
@@ -32,6 +32,7 @@ import type {
   ExtractedMessage,
 } from "../src/index";
 import {
+  createRuntimeProgressReporter,
   measure,
   summarizeResponse,
   summarizeToolCall,
@@ -254,12 +255,27 @@ function summarizeToolResult(
 function summarizeAgentResult(
   result: AgentRunResult<undefined>,
 ): Record<string, unknown> {
+  const codexSteps = result.steps.filter(
+    (step) => step.response.request?.url === "codex://local",
+  );
+  const bridgePromptChars = codexSteps.reduce((total, step) => {
+    const value = step.response.request?.body.bridgePromptChars;
+    return total + (typeof value === "number" ? value : 0);
+  }, 0);
   return {
     reason: result.reason,
     modelSteps: result.steps.length,
     toolCalls: result.toolCallsExecuted,
     elapsedMs: result.elapsedMs,
     tokens: result.usage,
+    ...(codexSteps.length
+      ? {
+          codexBridge: {
+            turns: codexSteps.length,
+            promptChars: bridgePromptChars,
+          },
+        }
+      : {}),
     files: fileManifest(),
   };
 }
@@ -272,7 +288,6 @@ function addUsage(target: AgentUsage, usage: AgentUsage): void {
 
 async function runPhase(
   trace: MeasureFn,
-  history: readonly ExtractedMessage[],
   phase: PhaseSpec,
 ): Promise<AgentRunResult<undefined>> {
   const measured = await trace(
@@ -285,6 +300,7 @@ async function runPhase(
     },
     async (phaseTrace: MeasureFn) => {
       let modelStep = 0;
+      const reportRuntimeProgress = createRuntimeProgressReporter();
       const measuredCall: typeof callLLM = async (tree, options) => {
         const step = ++modelStep;
         const response = await phaseTrace(
@@ -305,7 +321,10 @@ async function runPhase(
       };
 
       const result = await runAgent({
-        history: [...history, { role: "user", content: phase.goal }],
+        // Each phase is intentionally a fresh model session. The generated
+        // workspace is durable state; a phase may run in a new process days
+        // later and inspect the files it needs through the host tools.
+        history: [{ role: "user", content: phase.goal }],
         buildPrompt: (phaseHistory) => promptTree(phaseHistory),
         executeTool: async (call) => {
           const tool = await phaseTrace(
@@ -333,6 +352,11 @@ async function runPhase(
           response.text.trim()
             ? "Continue by using the available tools. Call phase_done only after the phase is implemented."
             : "Use the available tools to continue the phase. Call phase_done only when implementation is complete.",
+        onEvent: (event) => {
+          if (event.type === "runtime_progress") {
+            reportRuntimeProgress(event.progress, event.context.step + 1);
+          }
+        },
       });
 
       if (result.reason !== "completed") {
@@ -402,8 +426,6 @@ const totalUsage: AgentUsage = {
   outputTokens: 0,
   thinkingTokens: 0,
 };
-let history: readonly ExtractedMessage[] = [];
-
 await measure.assert(
   {
     label: "Game-builder run",
@@ -418,10 +440,9 @@ await measure.assert(
   },
   async (trace: MeasureFn) => {
     for (const phase of PHASES) {
-      const result = await runPhase(trace, history, phase);
+      const result = await runPhase(trace, phase);
       reports.push({ number: phase.number, title: phase.title, result });
       addUsage(totalUsage, result.usage);
-      history = result.history;
     }
     return reports;
   },

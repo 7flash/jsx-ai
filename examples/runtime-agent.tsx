@@ -27,6 +27,7 @@ import type {
   ExtractedMessage,
 } from "../src/index";
 import {
+  createRuntimeProgressReporter,
   measure,
   summarizeResponse,
   summarizeToolCall,
@@ -247,6 +248,7 @@ const measured = await measure.assert(
   },
   async (trace: MeasureFn) => {
     let modelStep = 0;
+    const reportRuntimeProgress = createRuntimeProgressReporter();
     const measuredCall: typeof callLLM = async (tree, options) => {
       const step = ++modelStep;
       const response = await trace(
@@ -288,6 +290,11 @@ const measured = await measure.assert(
         response.text.trim()
           ? "Continue with the declared application tools. Call done only when the task is complete."
           : "Use the declared application tools to continue the task.",
+      onEvent: (event) => {
+        if (event.type === "runtime_progress") {
+          reportRuntimeProgress(event.progress, event.context.step + 1);
+        }
+      },
     });
   },
 );

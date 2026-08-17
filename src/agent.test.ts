@@ -84,6 +84,24 @@ describe("runAgent", () => {
     ).toBe(true);
   });
 
+  test("exposes one simple assistant-text callback even for buffered runtimes", async () => {
+    const deltas: string[] = [];
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async () =>
+        response([{ name: "done", args: {} }], "I am finishing now."),
+      executeTool: () => "ok",
+      isComplete: (model) =>
+        model.toolCalls.some((call) => call.name === "done"),
+      onTextDelta: (event) => {
+        deltas.push(event.delta);
+      },
+    });
+
+    expect(deltas).toEqual(["I am finishing now."]);
+    expect(deltas.join("")).toBe(result.steps[0]?.response.text);
+  });
+
   test("does not partially execute a batch that exceeds the tool budget", async () => {
     let executions = 0;
     const result = await runAgent({
@@ -194,5 +212,41 @@ describe("runAgent", () => {
     expect(tool?.isError).toBe(true);
     expect(tool?.toolCallId).toBe(assistant?.toolCalls?.[0]?.id);
     expect(tool?.content).toContain("expected");
+  });
+
+  test("does not turn the whole-run duration budget into a per-call timeout", async () => {
+    let receivedTimeout: number | undefined = 123;
+    const result = await runAgent({
+      buildPrompt: () => emptyTree,
+      call: async (_tree, options) => {
+        receivedTimeout = options?.timeoutMs;
+        return response([{ name: "done", args: {} }]);
+      },
+      executeTool: () => "ok",
+      isComplete: (model) =>
+        model.toolCalls.some((call) => call.name === "done"),
+      maxDurationMs: 8 * 60_000,
+    });
+
+    expect(receivedTimeout).toBeUndefined();
+    expect(result.reason).toBe("completed");
+  });
+
+  test("preserves an explicit per-call timeout independently of maxDurationMs", async () => {
+    let receivedTimeout: number | undefined;
+    await runAgent({
+      buildPrompt: () => emptyTree,
+      callOptions: { timeoutMs: 12_345 },
+      call: async (_tree, options) => {
+        receivedTimeout = options?.timeoutMs;
+        return response([{ name: "done", args: {} }]);
+      },
+      executeTool: () => "ok",
+      isComplete: (model) =>
+        model.toolCalls.some((call) => call.name === "done"),
+      maxDurationMs: 8 * 60_000,
+    });
+
+    expect(receivedTimeout).toBe(12_345);
   });
 });

@@ -1,39 +1,37 @@
 # jsx-ai
 
-**Composable JSX for structured LLM calls, tools, and agent loops.**
+**JSX for structured LLM programs.**
 
-`jsx-ai` turns a JSX component tree into a validated provider-neutral prompt IR, lowers it through a strategy, sends it through a provider adapter, and normalizes the response back into text, tool calls, usage, and canonical multi-turn history.
+`jsx-ai` lets you compose system instructions, messages, tools, schemas, and agent conversations as JSX, then run the same program through provider APIs or a local Codex runtime.
 
 ```tsx
+// @jsxImportSource jsx-ai
 import { callLLM } from "jsx-ai"
 
 const result = await callLLM(
   <>
-    <system>You are a coding agent.</system>
+    <system>You are a careful coding assistant.</system>
 
-    <tool name="exec" description="Run a shell command">
-      <param name="command" type="string" required>
-        Shell command to execute
-      </param>
+    <tool name="read_file" description="Read a UTF-8 file">
+      <param name="path" type="string" required>Project-relative path</param>
     </tool>
 
-    <message role="user">List all TypeScript files.</message>
+    <message role="user">Inspect package.json and summarize the project.</message>
   </>,
 )
 
+console.log(result.text)
 console.log(result.toolCalls)
 console.log(result.usage)
 ```
 
-No React runtime is involved. JSX is only the typed composition syntax.
+No React. No provider-specific request JSON in application code. No logging side effects from the core library.
 
----
+## Why JSX?
 
-## Why jsx-ai?
+LLM applications are naturally compositional: prompts contain reusable instructions, tools contain schemas, agents contain histories, and larger systems assemble those pieces conditionally.
 
-Provider APIs expose the same broad concepts—system instructions, messages, tools, tool results, generation settings—but encode them differently.
-
-`jsx-ai` separates those concerns:
+`jsx-ai` treats JSX as the source language for that structure:
 
 ```text
 JSX components
@@ -41,26 +39,21 @@ JSX components
       ▼
 validated PromptIR
       │
-      ├── runtime: api
-      │     ├── strategy lowering
-      │     ├── Gemini adapter
-      │     ├── OpenAI adapter
-      │     ├── Anthropic adapter
-      │     └── custom providers
+      ├── API runtime
+      │     └── strategy → provider adapter → HTTP API
       │
-      └── runtime: codex
-            └── local Codex SDK/CLI
-                 (structured response bridge)
+      └── Codex runtime
+            └── local Codex App Server → ephemeral thread
       │
       ▼
-normalized LLMResponse
+normalized text + tool calls + usage
 ```
 
-The practical result is that your prompt composition and agent logic do not need provider-specific request JSON.
+The invariant is the canonical IR, not a provider wire format. Your application owns side effects and domain state; `jsx-ai` owns prompt normalization, provider/runtime lowering, canonical tool history, and the reusable agent loop.
 
 ---
 
-## Installation
+## Install
 
 ```bash
 bun add jsx-ai
@@ -72,7 +65,7 @@ or:
 npm install jsx-ai
 ```
 
-Configure JSX:
+Configure TypeScript JSX:
 
 ```json
 {
@@ -83,155 +76,121 @@ Configure JSX:
 }
 ```
 
-`jsx-ai` exports its own `jsx-runtime` and `jsx-dev-runtime`.
+`jsx-ai` ships `jsx-runtime` and `jsx-dev-runtime`; React is not required.
 
 ---
 
-# Runtime Selection
+## Choose a runtime once
 
-Runtime selection is a **library concern**, not an example concern. Every JSX example can run unchanged through either backend.
+Repository examples and normal `callLLM()`/`runAgent()` code do not need provider branches. Runtime selection belongs to `jsx-ai` configuration.
 
-```bash
-# Provider HTTP APIs (default)
-JSX_AI_RUNTIME=api bun run example:game
+### Provider API runtime
 
-# Local Codex SDK/CLI using saved Codex login
-JSX_AI_RUNTIME=codex bun run example:game
+Set a model and its provider credential:
+
+```powershell
+$env:JSX_AI_RUNTIME = "api"
+$env:JSX_AI_MODEL = "<provider-model-id>"
+$env:GEMINI_API_KEY = "..."       # when using Gemini
+# $env:OPENAI_API_KEY = "..."     # when using OpenAI
+# $env:ANTHROPIC_API_KEY = "..."  # when using Anthropic
 ```
 
-PowerShell:
+`jsx-ai` deliberately has **no hard-coded API model default**. Model release cycles are provider-owned; a provider-neutral library should not silently pin applications to one vendor or a model that will later be deprecated.
+
+Model precedence for `callLLM()` is:
+
+```text
+callOptions.model
+      ↓
+JSX_AI_MODEL
+      ↓
+<prompt model="...">
+```
+
+If API mode reaches a call without a model, `jsx-ai` fails with an actionable configuration error.
+
+### ChatGPT-authenticated Codex runtime
+
+Install the optional Codex CLI package and log in once:
+
+```bash
+bun add @openai/codex
+bunx @openai/codex login
+```
+
+Then:
 
 ```powershell
 $env:JSX_AI_RUNTIME = "codex"
-bun run example:game
+Remove-Item Env:JSX_AI_MODEL -ErrorAction SilentlyContinue
 ```
 
-Environment defaults:
+With no `JSX_AI_MODEL`, Codex chooses the model from its normal local configuration. You may set `JSX_AI_MODEL` when you intentionally want a library-wide override.
 
-| Variable | Meaning | Default |
-|---|---|---|
-| `JSX_AI_RUNTIME` | `api` or `codex` | `api` |
-| `JSX_AI_MODEL` | optional global model override | API: `gemini-2.5-flash`; Codex: use `~/.codex/config.toml` |
-
-Precedence for `callLLM()` is:
-
-```text
-callOptions.runtime → JSX_AI_RUNTIME → api
-callOptions.model   → JSX_AI_MODEL   → <prompt model> → runtime default
-```
-
-With `JSX_AI_RUNTIME=codex` and no `JSX_AI_MODEL`, jsx-ai deliberately omits the model from the SDK thread options so your normal Codex configuration chooses it. The examples do not duplicate Codex auth, model, sandbox, approval, or reasoning configuration.
-
-Explicit call options remain useful when an individual call intentionally overrides the process-wide default.
+The same JSX application code works in either runtime.
 
 ---
 
-# Quick Start
-
-## A text + tool call
+## Tools are components
 
 ```tsx
-import { callLLM } from "jsx-ai"
-
-const SearchTool = () => (
-  <tool name="search" description="Search the project">
-    <param name="query" type="string" required>
-      Search query
-    </param>
-  </tool>
-)
-
-const result = await callLLM(
+const WorkspaceTools = () => (
   <>
-    <system>
-      You are a software engineer working inside an existing project.
-    </system>
+    <tool name="list_files" description="List project files" />
 
-    <SearchTool />
+    <tool name="read_file" description="Read a UTF-8 file">
+      <param name="path" type="string" required>Project-relative path</param>
+    </tool>
 
-    <message role="user">
-      Find where authentication is implemented.
-    </message>
-  </>,
+    <tool name="write_file" description="Write or replace a UTF-8 file">
+      <param name="path" type="string" required>Project-relative path</param>
+      <param name="content" type="string" required>Complete file contents</param>
+    </tool>
+  </>
 )
-
-console.log(result.text)
-console.log(result.toolCalls)
-console.log(result.usage)
 ```
 
-`LLMResponse` contains:
+For nested inputs, use JSON Schema directly:
 
-```ts
-{
-  text: string
-  toolCalls: ToolCall[]
-  finishReason?: string
-  usage?: {
-    inputTokens: number
-    outputTokens: number
-    thinkingTokens?: number
-  }
-  raw: unknown
-  request?: {
-    url: string
-    body: JsonObject
-    prepared: PreparedPrompt
-  }
-}
+```tsx
+<tool
+  name="create_scene"
+  description="Create a scene"
+  schema={{
+    type: "object",
+    properties: {
+      camera: {
+        type: "object",
+        properties: {
+          fov: { type: "number", minimum: 1, maximum: 179 },
+        },
+        required: ["fov"],
+        additionalProperties: false,
+      },
+    },
+    required: ["camera"],
+    additionalProperties: false,
+  }}
+/>
 ```
+
+Schemas are normalized and validated before built-in providers receive them.
 
 ---
 
-# Agent Runtime
+## Agents: let `runAgent()` own the loop
 
-For iterative agents, prefer `runAgent()` over hand-writing the model → tool → result loop.
-
-`runAgent()` owns the invariant mechanics:
-
-- canonical assistant/tool-result history
-- stable tool-call IDs
-- provider metadata round-tripping
-- model-step and tool-call budgets
-- input/output token budgets
-- overall duration budget
-- cancellation
-- no-tool recovery
-- completion predicates
-- lifecycle events
-
-Your application still owns:
-
-- the JSX prompt
-- tool definitions
-- tool execution
-- project/application state
-- completion semantics
-
-## Minimal agent
+Do not rebuild assistant/tool history and usage accounting by hand. `runAgent()` centralizes the invariant mechanics while leaving tools and application state under your control.
 
 ```tsx
+// @jsxImportSource jsx-ai
 import { runAgent } from "jsx-ai"
-import type { CanonicalToolCall } from "jsx-ai"
+import type { CanonicalToolCall, ExtractedMessage } from "jsx-ai"
 
-const result = await runAgent({
-  history: [
-    { role: "user", content: "Create hello.txt containing hello world" },
-  ],
-
-  buildPrompt: history => (
+function Conversation({ history }: { history: readonly ExtractedMessage[] }) {
+  return (
     <>
-      <system>You are a filesystem agent.</system>
-
-      <tool name="write_file" description="Write a UTF-8 file">
-        <param name="path" type="string" required>File path</param>
-        <param name="content" type="string" required>Complete content</param>
-      </tool>
-
-      <tool name="done" description="Finish the task">
-        <param name="summary" type="string" required>Completion summary</param>
-      </tool>
-
       {history.map(message => (
         <message
           role={message.role}
@@ -244,24 +203,52 @@ const result = await runAgent({
         </message>
       ))}
     </>
-  ),
+  )
+}
+
+function AgentPrompt({ history }: { history: readonly ExtractedMessage[] }) {
+  return (
+    <>
+      <system>
+        You are an autonomous workspace agent. Inspect existing work before changing it.
+      </system>
+
+      <WorkspaceTools />
+
+      <tool name="done" description="Finish only when the task is complete">
+        <param name="summary" type="string" required>Completion summary</param>
+      </tool>
+
+      <Conversation history={history} />
+    </>
+  )
+}
+
+const state = { done: false }
+
+const result = await runAgent({
+  state,
+  history: [{ role: "user", content: "Create a polished index.html" }],
+  buildPrompt: history => <AgentPrompt history={history} />,
 
   executeTool: async (call: CanonicalToolCall) => {
-    if (call.name === "write_file") {
-      // perform the real side effect here
-      return `Wrote ${String(call.args.path)}`
+    switch (call.name) {
+      case "list_files":
+        return JSON.stringify(await listFiles())
+      case "read_file":
+        return await readFile(String(call.args.path))
+      case "write_file":
+        await writeFile(String(call.args.path), String(call.args.content))
+        return "written"
+      case "done":
+        state.done = true
+        return "completion accepted"
+      default:
+        return { content: `Unknown tool: ${call.name}`, isError: true }
     }
-
-    if (call.name === "done") {
-      return "Done"
-    }
-
-    return { content: `Unknown tool: ${call.name}`, isError: true }
   },
 
-  isComplete: response =>
-    response.toolCalls.some(call => call.name === "done"),
-
+  isComplete: () => state.done,
   maxSteps: 12,
   maxToolCalls: 64,
   maxDurationMs: 5 * 60_000,
@@ -271,237 +258,60 @@ console.log(result.reason)
 console.log(result.usage)
 ```
 
-The returned `AgentRunResult` includes the final canonical history, each model step, cumulative usage, tool-call count, elapsed time, stop reason, and caller-owned state.
+`runAgent()` owns:
+
+- canonical assistant/tool-result history;
+- stable tool-call IDs;
+- provider metadata round-tripping;
+- tool/model step budgets;
+- input/output token budgets;
+- cancellation and overall duration limits;
+- no-tool recovery and lifecycle events.
+
+Your application owns:
+
+- the JSX contract;
+- actual tool side effects;
+- filesystem/database/browser state;
+- domain validation;
+- the definition of “done”.
+
+### Codex efficiency inside an agent run
+
+When the selected runtime is Codex, `jsx-ai` starts one local App Server child process and one ephemeral Codex thread for the lifetime of a `runAgent()` invocation. The first model step sends the complete contract; later steps reuse that thread and send only newly appended host messages/tool results. The child process is closed when the run completes, stops, aborts, or throws. A new `runAgent()` invocation starts fresh.
+
+`callLLM()`, `callText()`, and `streamLLM()` use the same internal App Server transport; one-shot calls create a one-shot ephemeral thread and close it afterward. You never start or manage App Server yourself. This is intentional for worker architectures where a process handles one bounded phase, exits, and another process may continue from durable application state hours or days later.
 
 ---
 
-# Observability: Core Is Silent, Examples Are Verbose
+## Canonical history is structured
 
-The **core library does not write routine logs to stdout/stderr**.
-
-That is intentional. A library should not decide how a CLI, server, test runner, desktop app, or telemetry system presents model activity.
-
-Use one of these instead:
-
-1. inspect `LLMResponse` / `AgentRunResult` directly;
-2. use `runAgent({ onEvent })` for agent lifecycle events;
-3. use `registerHook()` for model-call telemetry;
-4. build structured presentation in your application or example.
-
-The repository examples use [`measure-fn`](https://github.com/7flash/measure-fn) as a **development-only dependency** for hierarchical timing/tracing. It is not a runtime dependency of `jsx-ai` itself.
-
-## What the game-builder example prints
-
-Run:
-
-```bash
-bun run example:game
-```
-
-or switch runtime/model globally without editing the example:
-
-```bash
-JSX_AI_RUNTIME=codex bun run examples/game-builder-agent.tsx ./game-output
-JSX_AI_RUNTIME=api JSX_AI_MODEL=gemini-3-flash-preview bun run examples/game-builder-agent.tsx ./game-output
-```
-
-The example prints its application configuration first; model-step result records show the runtime/model that jsx-ai actually used:
-
-```text
-jsx-ai game builder
-runtime/model: resolved by jsx-ai (JSX_AI_RUNTIME / JSX_AI_MODEL)
-strategy: hybrid (API runtime; Codex uses its structured bridge)
-output: .../game-output
-budgets: 8 model steps / 48 tool calls / 8 min per phase
-```
-
-Then `measure-fn` emits a hierarchical trace. Exact timings/token counts depend on the run, but the shape is intentionally detailed:
-
-```text
-[a] ... Game-builder run (model=..., strategy=hybrid, phases=3)
-[a-a] ... Phase 1 — Build Canvas game
-[a-a-a] ... Model step 1
-[a-a-a]     Model step 1 4.2s → {
-  "finishReason":"STOP",
-  "tools":[
-    {"tool":"write_file","path":"index.html","contentChars":...},
-    {"tool":"write_file","path":"game.js","contentChars":...}
-  ],
-  "tokens":{"inputTokens":...,"outputTokens":...,"thinkingTokens":...,"totalTokens":...}
-}
-[a-a-b] ... Tool — write_file (path=index.html, contentChars=...)
-[a-a-c] ... Tool — write_file (path=game.js, contentChars=...)
-...
-```
-
-At the end it prints a per-phase table:
-
-```text
-Run summary
-┌───────┬──────────────────────────────┬───────┬───────┬─────────────┬──────────────┬────────────────┬───────────┐
-│ phase │ name                         │ steps │ tools │ inputTokens │ outputTokens │ thinkingTokens │ elapsedMs │
-└───────┴──────────────────────────────┴───────┴───────┴─────────────┴──────────────┴────────────────┴───────────┘
-```
-
-and totals:
-
-```text
-Total tokens: <input> input + <output> output + <thinking> thinking = <total>
-Total elapsed: <seconds>s
-Output directory: .../game-output
-```
-
-followed by a generated-file manifest with byte sizes.
-
-This is the intended division of responsibility: **core returns structured facts; examples decide how those facts should look in a terminal.**
-
----
-
-# JSX Elements
-
-## `<system>`
-
-```tsx
-<system>
-  You are a senior TypeScript engineer.
-</system>
-```
-
-Multiple `<system>` blocks are combined into the canonical system instruction.
-
-## `<message>`
-
-```tsx
-<message role="user">
-  Refactor the database layer.
-</message>
-```
-
-Canonical history supports:
-
-- user messages
-- assistant text
-- assistant tool calls
-- tool results paired by tool-call ID/name
-- tool error results
-
-When reconstructing history manually:
-
-```tsx
-<message
-  role={message.role}
-  toolCalls={message.toolCalls}
-  toolCallId={message.toolCallId}
-  toolName={message.toolName}
-  isError={message.isError}
->
-  {message.content}
-</message>
-```
-
-For agents, `runAgent()` handles the canonical history mechanics for you.
-
-## `<tool>`
-
-Simple shorthand:
-
-```tsx
-<tool name="exec" description="Run a shell command">
-  <param name="command" type="string" required>
-    Command to execute
-  </param>
-</tool>
-```
-
-Advanced JSON Schema:
-
-```tsx
-<tool
-  name="search"
-  description="Search records"
-  schema={{
-    type: "object",
-    properties: {
-      filters: {
-        type: "object",
-        properties: {
-          status: { type: "string", enum: ["open", "closed"] },
-          limit: { type: "integer", minimum: 1, maximum: 100 },
-        },
-        required: ["status"],
-      },
-    },
-    required: ["filters"],
-  }}
-/>
-```
-
-Schemas are normalized and validated before a built-in provider receives them.
-
-## `<param>`
-
-```tsx
-<param
-  name="format"
-  type="string"
-  enum={["json", "text"]}
-  required
->
-  Output format
-</param>
-```
-
-A parameter may also use a nested `schema` object for constraints that do not fit the shorthand props.
-
-## `<prompt>`
-
-```tsx
-<prompt
-  model="gemini-2.5-flash"
-  strategy="hybrid"
-  temperature={0.2}
-  maxTokens={8000}
->
-  ...
-</prompt>
-```
-
-The same settings can be overridden in `callLLM()` options.
-
----
-
-# Canonical Prompt IR
-
-JSX is a frontend. The invariant object is the validated `PromptIR` / `ExtractedPrompt`.
+Tool calls are not flattened into prose. Canonical history retains assistant tool calls and matching tool-result messages:
 
 ```ts
-interface ExtractedPrompt {
-  tools: readonly ExtractedTool[]
-  messages: readonly ExtractedMessage[]
-  system?: string
-  model?: string
-  providerOverride?: ProviderName
-  temperature?: number
-  maxTokens?: number
-  strategy?: StrategyName
+{
+  role: "assistant",
+  content: "",
+  toolCalls: [
+    { id: "call_1", name: "read_file", args: { path: "package.json" } }
+  ]
+}
+
+{
+  role: "tool",
+  toolCallId: "call_1",
+  toolName: "read_file",
+  content: "{ ... }"
 }
 ```
 
-Useful exports:
+Provider-specific metadata required for later turns can round-trip opaquely through the canonical call without leaking into application tool semantics.
 
-```ts
-import {
-  extract,
-  render,
-  normalizePromptIR,
-  normalizePreparedPrompt,
-  normalizeJsonSchema,
-} from "jsx-ai"
-```
-
-`render(tree)` is a convenient way to inspect the validated prompt without calling a model.
+Use `render()` when you want to inspect the normalized prompt without sending a model request:
 
 ```tsx
+import { render } from "jsx-ai"
+
 const prompt = render(
   <>
     <system>You are helpful.</system>
@@ -514,183 +324,171 @@ console.log(prompt.messages)
 
 ---
 
-# Multi-Turn Tool History
+## API runtime: providers and strategies
 
-Tool history is not flattened into prose.
+Provider routing is inferred from the model name unless you explicitly register/override a provider.
 
-The canonical IR preserves assistant tool calls and corresponding tool-result messages, and each provider serializes that history using its native protocol.
-
-That includes opaque provider metadata which may be required for a later turn. Application-level agent code should carry canonical messages forward rather than reconstructing provider-specific fields itself.
-
-`runAgent()` is the easiest way to get this right.
-
----
-
-# Providers
-
-Provider routing is inferred from the model name unless explicitly overridden.
-
-| Model prefix | Adapter | Common environment variable |
+| Model family | Built-in adapter | Typical credential |
 |---|---|---|
 | `gemini-*` | Gemini | `GEMINI_API_KEY` |
 | `gpt-*`, `o*`, `chatgpt*` | OpenAI | `OPENAI_API_KEY` |
 | `claude-*` | Anthropic | `ANTHROPIC_API_KEY` |
-| `deepseek*`, `qwen*` | OpenAI-compatible | provider-specific key |
+| OpenAI-compatible custom families | OpenAI/custom adapter | provider-specific |
 
-Explicit override:
+Strategies control how tools are represented for the API runtime:
 
-```tsx
+| Strategy | Purpose |
+|---|---|
+| `auto` | current library default policy |
+| `native` | provider-native function/tool calling |
+| `hybrid` | native tools plus behavioral guidance |
+| `natural` | natural-language action blocks |
+| `nlt` | explicit natural-language tool-selection protocol |
+| `xml` | XML tool schema/response protocol |
+
+Codex does not use an API strategy; it uses its structured bridge while preserving the same `LLMResponse` and `runAgent()` contracts.
+
+Sampling controls such as `temperature` are provider/model capabilities, not portable guarantees. `jsx-ai` does not send deprecated temperature settings to modern Gemini generations.
+
+---
+
+## Runtime resolution
+
+`callLLM()` accepts explicit overrides when an application needs them:
+
+```ts
 await callLLM(tree, {
-  provider: "anthropic",
-  model: "claude-...",
+  runtime: "api",
+  model: "<model-id>",
+  strategy: "native",
+  timeoutMs: 60_000,
 })
 ```
 
-List registered backends:
+Explicit options win over environment configuration. Repository examples intentionally avoid these overrides so they can run unchanged under either runtime.
 
-```ts
-import { listProviders } from "jsx-ai"
+Useful environment variables:
 
-console.log(listProviders())
-```
+| Variable | Meaning |
+|---|---|
+| `JSX_AI_RUNTIME` | `api` or `codex` |
+| `JSX_AI_MODEL` | optional model override; required somewhere for API `callLLM()` |
+| `GEMINI_API_KEY` | Gemini API credential |
+| `OPENAI_API_KEY` | OpenAI API credential |
+| `ANTHROPIC_API_KEY` | Anthropic API credential |
+| `JSX_AI_EXPLORER_URL` | optional model-call telemetry sink |
 
-## OpenAI API runtime vs. ChatGPT-authenticated Codex runtime
+---
 
-`jsx-ai` has two execution runtimes. They share the same JSX/`PromptIR`/`LLMResponse`
-contract, but they are intentionally different transports and authentication paths.
+## Observability
 
-| Runtime | Execution path | Authentication | Usage/billing surface |
-|---|---|---|---|
-| `api` (default) | provider HTTP API | provider API key | provider API account |
-| `codex` | local `@openai/codex-sdk` / Codex CLI | saved Codex login by default | ChatGPT/Codex plan limits and credits |
+The core library is silent: it does not print routine logs and does not import `measure-fn`.
 
-The Codex SDK is optional because most `jsx-ai` applications do not need it:
+Structured information is available through:
 
-```bash
-bun add @openai/codex-sdk
-bunx @openai/codex login
-```
+- `LLMResponse` for model text, tool calls, finish reason, usage, and request diagnostics;
+- `AgentRunResult` for cumulative usage, steps, stop reason, tool count, and elapsed time;
+- `runAgent({ onTextDelta, onEvent })` for streamed assistant text plus model/tool lifecycle and optional runtime progress;
+- `registerHook()` for model-call telemetry.
 
-Then the **same application code** can run through Codex by selecting the runtime outside the program:
+Repository examples use `measure-fn` as a development-only presentation layer. The game builder reports model/tool timing, token usage, generated file sizes, Codex bridge diagnostics, and real intermediate Codex progress while a model step is still running.
 
-```bash
-JSX_AI_RUNTIME=codex bun run your-app.tsx
-```
+### Stream assistant words during an agent run
+
+The common application UI should not have to choose between an agent API and a text-stream API. Use `runAgent()` once and render two simple surfaces:
+
+- `onTextDelta` — append real assistant-visible words while the current model step is still generating;
+- `onEvent` — show atomic tool lifecycle (`tool_start`, `tool_end`) and completion.
 
 ```tsx
-// No Codex branch is required in application code.
-const result = await callLLM(tree)
+await runAgent({
+  history,
+  buildPrompt,
+  executeTool,
+
+  onTextDelta({ delta }) {
+    chat.appendAssistantText(delta)
+  },
+
+  onEvent(event) {
+    if (event.type === "tool_start") {
+      chat.setActivity(`Running ${event.call.name}…`)
+    }
+
+    if (event.type === "tool_end") {
+      chat.setActivity("")
+    }
+
+    if (event.type === "stop") {
+      chat.finish(event.reason)
+    }
+  },
+})
 ```
 
-If you need a process-wide model override, set `JSX_AI_MODEL`. Otherwise Codex uses the model from `~/.codex/config.toml`. Per-call `runtime`, `model`, and `codex` options still exist for deliberate exceptions, but repository examples do not need them.
+For Codex, `jsx-ai` receives the in-flight structured response, incrementally decodes only its top-level assistant `text` field, and forwards that decoded text through `onTextDelta`. Tool-call JSON remains private until the whole response has completed and passed schema/tool validation.
 
-`auth: "chatgpt"` is the default. In that mode `jsx-ai` gives the Codex child process a
-controlled environment with `OPENAI_API_KEY` and `CODEX_API_KEY` removed, so an unrelated
-API key in the parent shell does not silently change the intended auth path. Passing
-`apiKey` together with `runtime: "codex"` is rejected. Use `runtime: "api"` when explicit
-OpenAI API-key billing is what you want.
+Conceptually:
 
-`codex.auth: "inherit"` is an advanced escape hatch that lets the Codex SDK inherit the
-parent process environment. Use it only when that behavior is intentional.
+```text
+model step starts
+    │
+    ├── text: "I'll inspect "  ─────→ onTextDelta({ delta: "I'll inspect " })
+    ├── text: "the project."  ─────→ onTextDelta({ delta: "the project." })
+    │
+    └── structured toolCalls JSON
+              │
+              │ buffered inside jsx-ai
+              ▼
+         complete + validate
+              │
+              ├── tool_start
+              ├── executeTool()
+              └── tool_end
+```
 
-The Codex adapter uses the official SDK's structured-output facility to bridge canonical
-`jsx-ai` tools into normalized `{ text, toolCalls }`. `runAgent()` therefore continues to
-own the normal host tool loop; the Codex runtime defaults to a read-only sandbox, no
-network access, and no approval prompts.
+The callback never receives partial `toolCalls`, partial `arguments_json`, or partial `write_file.content`. It also never exposes hidden chain-of-thought. Concatenating the text deltas for a successful step reconstructs that step's final visible `response.text`.
 
-A few options differ by runtime:
+Codex can additionally emit `runtime_progress` events through `onEvent` for diagnostics such as normalized status/activity/warnings. Those are optional and are not required for a normal chat UI.
 
-- `strategy` controls provider lowering for `runtime: "api"`; Codex uses its own structured bridge;
-- `retries` is an HTTP-provider option and is not applied to Codex SDK turns;
-- `temperature` and `maxTokens` are not currently Codex SDK thread controls;
-- use `codex.modelReasoningEffort` for Codex reasoning effort;
-- `streamLLM()` currently supports the API runtime only; use `callLLM()`/`callText()` for Codex;
-- Codex token usage is normalized into `inputTokens`, `outputTokens`, and `thinkingTokens` when reported by the SDK.
+Runtimes that do not yet expose structured assistant-text deltas still honor the same `onTextDelta` callback by delivering the final visible assistant text once before `model_end`. This keeps the application contract stable while runtime-specific streaming support improves independently.
 
-ChatGPT/Codex plan usage is not unlimited or equivalent to raw API credits; its included
-limits and optional credit behavior are governed by the active ChatGPT plan.
+Run the practical example:
 
-## Custom provider
+```bash
+bun run example:streaming
+```
+
+It shows assistant text arriving while each model step is running, followed by atomic host-tool events.
+
+### Plain text streaming without an agent
+
+Use `streamLLM()` when there are no structured application tools and you simply want a text stream:
 
 ```ts
-import { registerProvider } from "jsx-ai"
-import type { Provider } from "jsx-ai"
-
-const provider: Provider = {
-  name: "custom",
-  buildRequest(prepared, model, apiKey) {
-    // lower PreparedPrompt to your wire request
-    throw new Error("implement me")
-  },
-  parseResponse(data) {
-    // normalize unknown provider response
-    throw new Error("implement me")
-  },
+for await (const chunk of streamLLM([
+  { role: "user", content: "Write a short explanation of JSX." },
+])) {
+  process.stdout.write(chunk)
 }
-
-const dispose = registerProvider("custom", provider)
-
-// ... use provider ...
-
-dispose()
 ```
 
-Registration returns a disposer so tests/plugins can restore the previous registry state.
+`streamLLM()` works with both API and Codex runtimes. A yielded chunk is a transport text delta, not a guaranteed one-token boundary. Under Codex, `jsx-ai` consumes App Server `item/agentMessage/delta` notifications from the local child process.
+
+Use this rule of thumb:
+
+```text
+structured agent with tools  → runAgent({ onTextDelta, onEvent })
+plain text generation        → streamLLM()
+```
+
+Core code returns facts; applications decide how those facts should be displayed.
 
 ---
 
-# Strategies
+## Skills
 
-Strategies decide how canonical tools/messages are presented to and parsed from the model.
-
-Built-ins:
-
-- `native` — provider-native function/tool calling;
-- `hybrid` — native tool calling plus behavioral guidance;
-- `natural` — natural-language action blocks;
-- `nlt` — explicit natural-language tool selection protocol;
-- `xml` — XML prompt/response tool protocol;
-- `auto` — resolves to the library's automatic/default strategy policy.
-
-```tsx
-await callLLM(tree, {
-  model: "gemini-2.5-flash",
-  strategy: "hybrid",
-})
-```
-
-Custom strategies:
-
-```ts
-import { registerStrategy } from "jsx-ai"
-
-const dispose = registerStrategy("my-strategy", {
-  name: "my-strategy",
-  prepare(prompt) {
-    return {
-      system: prompt.system,
-      messages: prompt.messages,
-    }
-  },
-  parseResponse(response) {
-    return {
-      text: response.text,
-      toolCalls: response.nativeToolCalls,
-    }
-  },
-})
-
-// later
-dispose()
-```
-
-Prepared prompts are normalized again before provider execution, so a malformed custom strategy cannot silently bypass the canonical boundary.
-
----
-
-# Skills
-
-Skills support two-phase context loading from Markdown files with YAML frontmatter.
+Skills provide two-phase context loading from Markdown files with frontmatter:
 
 ```md
 ---
@@ -698,14 +496,10 @@ name: bun-expert
 description: Bun runtime expertise
 ---
 
-## Bun runtime
-
-- use Bun.serve()
-- use bun:sqlite
-- use bun:test
+Use Bun.serve, bun:sqlite, and bun:test where appropriate.
 ```
 
-Discovery:
+Discovery keeps context small:
 
 ```tsx
 <>
@@ -715,128 +509,58 @@ Discovery:
 </>
 ```
 
-Resolution:
+Resolve only what the agent requests:
 
 ```tsx
 <Skill path="skills/bun-expert.md" resolve />
 ```
 
-`resolveSkills()` performs normalized skill-name resolution, while parsed skill files are cached to avoid repeated synchronous reads during prompt rendering.
-
-Run the measured example:
-
-```bash
-bun run example:skills
-```
+See `examples/skills-agent.tsx` for an observable end-to-end example.
 
 ---
 
-# `callLLM()`
+## Lower-level APIs
 
-Use `callLLM()` for structured prompts/tools.
+### `callLLM(tree, options?)`
 
-```tsx
-const result = await callLLM(tree, {
-  model: "gemini-2.5-flash",
-  strategy: "hybrid",
-  temperature: 0.2,
-  maxTokens: 8000,
-  retries: 3,
-  timeoutMs: 90_000,
-})
-```
+Use for structured JSX prompts and tool calls. Runtime/model may come from environment configuration.
 
-Important request options include:
+### `callText(messages, options?)` / `callText(model, messages, options?)`
 
-| Field | Purpose |
-|---|---|
-| `model` | model name and provider-routing hint |
-| `provider` | explicit provider override |
-| `strategy` | tool encoding/parsing strategy |
-| `apiKey` | explicit API key override |
-| `temperature` | sampling temperature |
-| `maxTokens` | output-token limit |
-| `retries` | transient request retries |
-| `timeoutMs` | request timeout |
-| `signal` | caller cancellation |
-
-The current fallback model when none is supplied is `gemini-2.5-flash`. For reproducible applications, set the model explicitly.
-
----
-
-# `callText()`
-
-For simple text-only generation:
+Use for simple text-only calls. The messages-first form resolves runtime/model through the same `JSX_AI_*` configuration as `callLLM()`; the positional-model form remains available when you want an explicit override.
 
 ```ts
-import { callText } from "jsx-ai"
-
-const text = await callText(
-  "gemini-2.5-flash",
-  [
-    { role: "system", content: "You are a planner." },
-    { role: "user", content: "Break this migration into steps." },
-  ],
-  {
-    temperature: 0.3,
-    maxTokens: 4000,
-    timeoutMs: 60_000,
-  },
-)
+const text = await callText([
+  { role: "system", content: "Be concise." },
+  { role: "user", content: "Summarize this change." },
+])
 ```
 
----
+### `streamLLM(messages, options?)` / `streamLLM(model, messages, options?)`
 
-# `streamLLM()`
+Streams user-visible assistant text deltas under either runtime. API runtimes use the provider's streaming transport. Codex uses the local Codex App Server delta event (`item/agentMessage/delta`) while keeping child-process management internal to `jsx-ai`.
+
+A yielded chunk is not guaranteed to equal one tokenizer token. `streamLLM()` is also distinct from `runAgent()`'s `runtime_progress`: the former is visible assistant text; the latter is structured status/activity inside a model step.
+
+### Registry extension points
 
 ```ts
-import { streamLLM } from "jsx-ai"
+const disposeProvider = registerProvider(myProvider)
+const disposeStrategy = registerStrategy(myStrategy)
 
-for await (const chunk of streamLLM(
-  "gemini-2.5-flash",
-  [
-    { role: "system", content: "You are a storyteller." },
-    { role: "user", content: "Tell me a short story." },
-  ],
-)) {
-  process.stdout.write(chunk)
-}
+// later
+
+disposeProvider()
+disposeStrategy()
 ```
 
-Streaming uses the same provider routing/authentication infrastructure and supports caller cancellation.
+Registration returns a disposer so tests/plugins do not permanently pollute global registries.
 
 ---
 
-# Telemetry Hooks
+## Errors
 
-`registerHook()` exposes normalized model-call telemetry without printing it.
-
-```ts
-import { registerHook } from "jsx-ai"
-
-const dispose = registerHook(event => {
-  telemetry.record({
-    model: event.model,
-    provider: event.provider,
-    strategy: event.strategy,
-    usage: event.usage,
-    durationMs: event.durationMs,
-    tools: event.tools,
-  })
-})
-
-// ... run calls ...
-
-dispose()
-```
-
-Hook failures are isolated from model execution.
-
----
-
-# Errors
-
-Transport/provider failures use exported structured error classes:
+Transport/runtime failures use exported error classes and stable codes:
 
 ```ts
 import {
@@ -849,148 +573,95 @@ import {
 } from "jsx-ai"
 ```
 
-Consumers can branch on stable error identity/codes rather than parsing console text.
+Prefer error identity/codes over parsing message strings.
 
 ---
 
-# Markdown with `md`
+## Examples
 
-```tsx
-import { md } from "jsx-ai"
-
-<system>{md`
-  You are an autonomous browser-game engineer.
-
-  Requirements:
-  - inspect existing files before changing them
-  - keep the codebase small
-  - do not claim completion until the game is playable
-`}</system>
-```
-
-`md` removes the common indentation from multiline template strings.
-
----
-
-# Examples
-
-All repository examples are intentionally observable and use `measure-fn` for timing/tracing.
+All examples are runtime-neutral and intentionally observable.
 
 ```bash
 bun run example:coding
 bun run example:skills
-bun run example:game
 bun run example:runtime
+bun run example:text-stream
+bun run example:streaming
+bun run example:game
 ```
 
-The dependency belongs to `devDependencies`; importing `jsx-ai` does not import or initialize `measure-fn`.
+Set `JSX_AI_RUNTIME` / `JSX_AI_MODEL` outside the example; do not edit the source to switch backends.
 
-## Game builder
+### `examples/runtime-agent.tsx`
 
-`examples/game-builder-agent.tsx` demonstrates the complete agent stack:
+Small reference agent showing the recommended boundary: JSX defines the contract, `runAgent()` owns loop mechanics, and the application owns host tools.
 
-1. build a Canvas game;
-2. inspect and improve it;
-3. migrate the presentation to Three.js;
-4. preserve canonical multi-turn tool history across all phases;
-5. report measured model/tool durations, token usage, phase totals, and generated-file sizes.
+### `examples/text-stream.ts`
 
-The example writes only inside its configured output directory.
+Small runtime-neutral text example using `streamLLM(messages)`. Under Codex it prints real `item/agentMessage/delta` assistant text as the local Codex turn generates it; under API runtime it prints provider text deltas. It also reports chunk count, character count, time to first chunk, and total elapsed time with `measure-fn`.
 
-Every example uses the same library-level runtime switch:
+### `examples/streaming-agent.tsx`
 
-```bash
-bunx @openai/codex login
-JSX_AI_RUNTIME=codex bun run example:game ./game-output
-JSX_AI_RUNTIME=codex bun run example:coding
-JSX_AI_RUNTIME=codex bun run example:skills
-JSX_AI_RUNTIME=codex bun run example:runtime ./runtime-output "Create a tiny browser game in index.html"
-```
+Minimal two-step structured agent showing the common UI contract: `onTextDelta` renders assistant words as they arrive while `tool_start` / `tool_end` remain atomic. Codex runtime-progress events remain available as optional diagnostics.
 
-On PowerShell, set it once for the shell session:
+### `examples/game-builder-agent.tsx`
 
-```powershell
-$env:JSX_AI_RUNTIME = "codex"
-bun run example:game ./game-output
-bun run example:coding
-bun run example:skills
-```
+A larger three-phase worker-style example:
 
-Switch back just as globally:
+1. build a playable Canvas game;
+2. inspect durable workspace files and improve gameplay;
+3. start a fresh agent phase and migrate the renderer.
 
-```powershell
-$env:JSX_AI_RUNTIME = "api"
-$env:JSX_AI_MODEL = "gemini-2.5-flash"
-```
-
-## Runtime-neutral host-tool agent
-
-`examples/runtime-agent.tsx` is the smaller reference example for the runtime boundary. It contains no API/Codex branch: `runAgent()` and the application own `list_files`, `read_file`, `write_file`, and `done`, while jsx-ai chooses the execution backend.
-
-The example uses `measure-fn` to show every model step and host tool execution plus normalized input/output/reasoning tokens. Core `src/` code remains silent.
+Each phase has fresh conversation history. The generated workspace is the durable state between phases, matching systems where the next worker/process may run much later.
 
 ---
 
-# Benchmark
-
-Run:
+## Benchmark
 
 ```bash
-bun run bench
+JSX_AI_MODEL=<model-id> bun run bench
 ```
 
-The benchmark is designed around completed task outcomes under equal budgets rather than a fixed number of conversational turns. It records strategy/model configuration, usage, latency, tool activity, stopping conditions, infrastructure errors, and final evaluator results.
+or use the Codex runtime/model configuration you intentionally want to evaluate.
 
-The README intentionally does **not** publish a stale hard-coded strategy leaderboard. Benchmark numbers are meaningful only together with the model, scenario, iteration count, budgets, and run date that produced them.
+The benchmark records final task outcomes under equal budgets, usage, latency, tool activity, stopping conditions, infrastructure failures, and evaluator results. It does not publish a timeless strategy leaderboard because model/runtime behavior changes.
+
+Benchmarks should always be reported with their model/runtime, scenario, budgets, iteration count, and run date.
 
 ---
 
-# Development
+## Development
 
 ```bash
 bun install
 bun run typecheck
 bun test
 bun run check
-bun run bench
 ```
 
 Useful scripts:
 
-| Script | Command |
-|---|---|
-| typecheck | `bun run typecheck` |
-| tests | `bun test` |
-| full check | `bun run check` |
-| benchmark | `bun run bench` |
-| coding example | `bun run example:coding` |
-| skills example | `bun run example:skills` |
-| game builder | `bun run example:game` |
-| Codex subscription example | `bun run example:codex` |
+```text
+example:coding   one observable structured tool call
+example:skills   skill discovery/resolution
+example:runtime      recommended runtime-neutral host-tool agent
+example:text-stream  visible assistant text-delta stream (API or Codex)
+example:streaming    practical streamed agent UI: text deltas + atomic tools
+example:game         multi-phase observable game-building agent
+bench            end-to-end strategy benchmark
+```
 
 ---
 
-# Design Principles
+## Design principles
 
-## 1. JSX is syntax, not the transport
-
-JSX produces a structured prompt tree. Provider adapters—not components—own wire formats.
-
-## 2. The canonical IR is the contract
-
-Messages, tool schemas, tool-call IDs, and tool-result pairing are validated before provider execution.
-
-## 3. Provider-specific metadata can round-trip without contaminating agent semantics
-
-A provider may need opaque metadata on later turns. Canonical tool calls can preserve namespaced provider metadata while application tools continue to reason only about IDs, names, and JSON arguments.
-
-## 4. Agent mechanics are reusable, application behavior is not hidden
-
-`runAgent()` centralizes the repetitive loop mechanics but does not own your filesystem, database, browser, shell, or domain policy.
-
-## 5. Libraries return data; applications decide presentation
-
-The core is deliberately quiet. Detailed terminal traces belong in examples/CLIs, where they can be designed for humans without surprising library consumers.
+1. **JSX is source syntax, not transport.** Provider adapters own wire formats.
+2. **The canonical IR is the contract.** Invalid tool schemas/history fail before provider execution.
+3. **Runtime choice is configuration.** Application examples do not branch on Gemini/OpenAI/Codex.
+4. **Agents own domain state through tools.** `runAgent()` owns repetitive conversation mechanics, not your filesystem/database/browser.
+5. **No hidden provider default.** API models must be selected intentionally; Codex may inherit its own configured model.
+6. **Core stays quiet.** Structured telemetry is returned; presentation belongs to applications and examples.
+7. **Durable application state beats hidden long-lived chat state.** Separate agent runs can reconstruct what matters from files/database/domain state.
 
 ---
 

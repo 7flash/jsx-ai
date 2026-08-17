@@ -1,5 +1,5 @@
 import { configure, measure } from "measure-fn";
-import type { LLMResponse, ToolCall } from "../src";
+import type { AgentRuntimeProgress, LLMResponse, ToolCall } from "../src";
 
 configure({
   timestamps: true,
@@ -9,6 +9,32 @@ configure({
 
 export { measure };
 export type { MeasureFn } from "measure-fn";
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function createRuntimeProgressReporter(): (
+  progress: AgentRuntimeProgress,
+  step: number,
+) => void {
+  let lastKey = "";
+  return (progress, step) => {
+    const key = `${step}:${progress.kind}:${progress.itemType ?? ""}:${progress.message}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    const elapsed =
+      progress.elapsedMs < 1000
+        ? `${Math.max(0, Math.round(progress.elapsedMs))}ms`
+        : `${(progress.elapsedMs / 1000).toFixed(1)}s`;
+    const marker = progress.kind === "warning" ? "!" : "↳";
+    console.log(
+      `    ${marker} [${progress.runtime}:${progress.kind} +${elapsed}] ${progress.message}`,
+    );
+  };
+}
 
 export interface UsageSnapshot {
   inputTokens: number;
@@ -64,8 +90,59 @@ export function summarizeResponse(
   response: LLMResponse,
 ): Record<string, unknown> {
   const usage = usageSnapshot(response.usage);
-  const runtime = response.request?.url === "codex://local" ? "codex" : "api";
-  const requestModel = response.request?.body.model;
+  const runtime = response.request?.url?.startsWith("codex://")
+    ? "codex"
+    : "api";
+  const body = response.request?.body;
+  const requestModel = body?.model;
+  const raw = record(response.raw);
+  const rawUsage = record(raw?.usage);
+  const rawStream = record(raw?.stream);
+  const codexBridge =
+    runtime === "codex"
+      ? {
+          threadTurn:
+            typeof body?.threadTurn === "number" ? body.threadTurn : undefined,
+          bridgeMode:
+            typeof body?.bridgeMode === "string" ? body.bridgeMode : undefined,
+          promptChars:
+            typeof body?.bridgePromptChars === "number"
+              ? body.bridgePromptChars
+              : undefined,
+          messagesSent:
+            typeof body?.bridgeMessagesSent === "number"
+              ? body.bridgeMessagesSent
+              : undefined,
+          messagesTotal:
+            typeof body?.bridgeMessagesTotal === "number"
+              ? body.bridgeMessagesTotal
+              : undefined,
+          cachedInputTokens:
+            typeof rawUsage?.cachedInputTokens === "number"
+              ? rawUsage.cachedInputTokens
+              : undefined,
+          cacheWriteInputTokens:
+            typeof rawUsage?.cacheWriteInputTokens === "number"
+              ? rawUsage.cacheWriteInputTokens
+              : undefined,
+          streamEvents:
+            typeof rawStream?.events === "number"
+              ? rawStream.events
+              : undefined,
+          streamProgressEvents:
+            typeof rawStream?.progressEvents === "number"
+              ? rawStream.progressEvents
+              : undefined,
+          timeToFirstEventMs:
+            typeof rawStream?.firstEventMs === "number"
+              ? rawStream.firstEventMs
+              : undefined,
+          timeToFirstStatusMs:
+            typeof rawStream?.firstStatusMs === "number"
+              ? rawStream.firstStatusMs
+              : undefined,
+        }
+      : undefined;
   return {
     runtime,
     model:
@@ -74,6 +151,7 @@ export function summarizeResponse(
         : runtime === "codex"
           ? "Codex config"
           : "provider request",
+    ...(codexBridge ? { bridge: codexBridge } : {}),
     finishReason: response.finishReason ?? "unknown",
     tools: response.toolCalls.map(summarizeToolCall),
     text: response.text ? truncate(response.text, 220) : "",
