@@ -1,3 +1,5 @@
+import type { JsonValue } from "../types";
+
 /**
  * Runtime-neutral progress emitted while a model call is still running.
  *
@@ -22,11 +24,30 @@ export interface RuntimeProgress {
  * reuse native conversation/process objects without adding session concepts to
  * the public agent API. API runtimes ignore it.
  */
+export type RuntimeToolProgress =
+  | { type: "tool_detected"; index: number; name: string }
+  | {
+      type: "field_delta";
+      index: number;
+      name?: string;
+      path: readonly string[];
+      delta: string;
+    }
+  | {
+      type: "field_ready";
+      index: number;
+      name?: string;
+      path: readonly string[];
+      value: JsonValue;
+    };
+
 export interface AgentRuntimeContext {
   codex?: unknown;
   onProgress?: (progress: RuntimeProgress) => void | Promise<void>;
   /** Visible assistant text decoded from an in-flight structured runtime turn. */
   onTextDelta?: (delta: string) => void | Promise<void>;
+  /** Semantic progress for a structured tool call while the model is still building it. */
+  onToolProgress?: (progress: RuntimeToolProgress) => void | Promise<void>;
   cleanups: Array<() => void | Promise<void>>;
 }
 
@@ -62,4 +83,5 @@ export async function disposeAgentRuntimeContext(
   context.codex = undefined;
   context.onProgress = undefined;
   context.onTextDelta = undefined;
+  context.onToolProgress = undefined;
 }

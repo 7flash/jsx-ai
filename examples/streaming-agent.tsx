@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 // @jsxImportSource jsx-ai
 /**
- * The common agent UI pattern in jsx-ai:
+ * The common streamed-agent UI pattern uses one ordered `onEvent` stream:
  *
- *   onTextDelta  → append real assistant words to the UI as they arrive
- *   tool_start   → show what the agent is doing
- *   tool_end     → clear/update that activity
- *   stop         → finalize the UI
+ *   text_delta      → what the agent is saying
+ *   tool_progress   → what action the model is preparing
+ *   tool_start/end  → what the host is actually executing
  *
- * Tool-call JSON stays buffered and validated inside jsx-ai. Applications never
- * need to parse partial tool arguments just to show a typing/progress experience.
+ * `onTextDelta` and `onToolProgress` remain convenience callbacks when an app
+ * prefers separate handlers. No raw partial JSON is exposed and progressive
+ * tool parsing can never execute a tool.
  */
 
 import { callLLM, md, runAgent } from "../src/index";
@@ -29,22 +29,20 @@ import {
 } from "./_example-observability";
 
 interface DemoState {
-  contextRead: boolean;
-  completed?: string;
+  saved?: { path: string; content: string };
 }
 
 const DemoTools = () => (
   <>
     <tool
-      name="get_context"
-      description="Read the application-owned context needed for the task"
-    />
-    <tool
-      name="finish"
-      description="Finish after get_context has been used and the recommendation is ready"
+      name="save_recommendation"
+      description="Save the final recommendation in the application"
     >
-      <param name="summary" type="string" required>
-        One concise final recommendation
+      <param name="path" type="string" required>
+        Output path
+      </param>
+      <param name="content" type="string" required>
+        Recommendation Markdown
       </param>
     </tool>
   </>
@@ -72,11 +70,11 @@ function DemoPrompt({ history }: { history: readonly ExtractedMessage[] }) {
   return (
     <prompt strategy="hybrid">
       <system>{md`
-        You are demonstrating a practical streamed agent UI.
+        You are demonstrating a streamed application agent.
 
-        Briefly explain what you are about to do in normal assistant text,
-        then call get_context. After seeing its result, briefly explain your
-        recommendation and call finish. Keep visible text concise.
+        Briefly tell the user what recommendation you are preparing, then call
+        save_recommendation with path "recommendation.md" and a useful Markdown
+        recommendation in content. Keep visible assistant text concise.
       `}</system>
       <DemoTools />
       <Conversation history={history} />
@@ -88,30 +86,23 @@ function executeTool(
   call: CanonicalToolCall,
   state: DemoState,
 ): AgentToolResult {
-  if (call.name === "get_context") {
-    state.contextRead = true;
+  if (call.name !== "save_recommendation") {
+    return { content: `Unknown tool: ${call.name}`, isError: true };
+  }
+
+  const path = String(call.args.path ?? "").trim();
+  const content = String(call.args.content ?? "");
+  if (!path || !content.trim()) {
     return {
-      content: JSON.stringify({
-        product: "jsx-ai",
-        goal: "Show real assistant words while structured agent tools remain safe and atomic",
-        constraint: "The UI must never parse partial tool-call JSON",
-      }),
+      content: "save_recommendation requires path and content",
+      isError: true,
     };
   }
 
-  if (call.name === "finish") {
-    if (!state.contextRead)
-      return {
-        content: "finish rejected: call get_context first",
-        isError: true,
-      };
-    const summary = String(call.args.summary ?? "").trim();
-    if (!summary) return { content: "finish requires summary", isError: true };
-    state.completed = summary;
-    return { content: `Accepted: ${summary}` };
-  }
-
-  return { content: `Unknown tool: ${call.name}`, isError: true };
+  // This demo keeps the side effect in memory. A real app could write a file,
+  // update a database, enqueue a job, etc. Only this function performs it.
+  state.saved = { path, content };
+  return { content: `Saved ${content.length} characters to ${path}` };
 }
 
 function summarizeToolResult(result: AgentToolResult): Record<string, unknown> {
@@ -131,20 +122,23 @@ function summarizeRun(
     toolCalls: result.toolCallsExecuted,
     usage: result.usage,
     elapsedMs: result.elapsedMs,
-    completed: result.state.completed ?? "",
+    savedPath: result.state.saved?.path ?? "",
+    savedChars: result.state.saved?.content.length ?? 0,
   };
 }
 
-console.log(`jsx-ai streamed agent UI
+console.log(`jsx-ai practical streamed agent
 
-The application uses one agent call and two simple surfaces:
-  onTextDelta  → append assistant words immediately
-  onEvent      → render tool lifecycle / completion
+Application UI contract — one ordered onEvent stream:
+  text_delta      what the agent is saying
+  tool_progress   what tool/fields the model is preparing
+  tool_start/end  what the host is actually executing
+`);
 
-Partial structured tool JSON is never exposed.\n`);
-
-const state: DemoState = { contextRead: false };
+const state: DemoState = {};
 let activeTextStep = -1;
+let generatedContentChars = 0;
+let preparedPath = "";
 
 const result = await measure.assert(
   {
@@ -172,7 +166,7 @@ const result = await measure.assert(
         {
           role: "user",
           content:
-            "Read the application context and recommend the simplest safe streaming interface for an agent UI.",
+            "Recommend the simplest safe streaming interface for an agent UI.",
         },
       ],
       buildPrompt: (history) => <DemoPrompt history={history} />,
@@ -189,28 +183,53 @@ const result = await measure.assert(
         return toolResult;
       },
       call: measuredCall,
-      maxSteps: 4,
-      maxToolCalls: 4,
+      maxSteps: 2,
+      maxToolCalls: 2,
       maxDurationMs: 2 * 60_000,
       isComplete: (_response: LLMResponse, _toolResults, context) =>
-        Boolean(context.state.completed),
-      onNoToolCalls: () => "Use get_context first, then finish.",
+        Boolean(context.state.saved),
 
-      // This is the common chat/UI streaming surface. For Codex these are
-      // decoded from the structured response while the turn is still running.
-      // For runtimes without structured delta support, jsx-ai falls back to
-      // delivering the final assistant text once before model_end.
-      onTextDelta: ({ delta, step }) => {
-        if (activeTextStep !== step) {
-          activeTextStep = step;
-          process.stdout.write(`\nassistant[${step + 1}]> `);
-        }
-        process.stdout.write(delta);
-      },
-
-      // Tools remain atomic. The application sees them only after jsx-ai has
-      // received and validated the complete structured model response.
       onEvent: (event) => {
+        if (event.type === "text_delta") {
+          const step = event.context.step;
+          if (activeTextStep !== step) {
+            activeTextStep = step;
+            process.stdout.write(`\nassistant> `);
+          }
+          process.stdout.write(event.delta);
+          return;
+        }
+
+        if (event.type === "tool_progress") {
+          const progress = event.progress;
+          if (progress.type === "tool_detected") {
+            console.log(`\nprepare> ${progress.name}`);
+          }
+
+          if (progress.type === "field_ready" && progress.path[0] === "path") {
+            preparedPath = String(progress.value);
+            console.log(`prepare> path = ${preparedPath}`);
+          }
+
+          if (
+            progress.type === "field_delta" &&
+            progress.path[0] === "content"
+          ) {
+            generatedContentChars += progress.delta.length;
+            process.stdout.write(
+              `\rprepare> ${preparedPath || "content"} · ${generatedContentChars} chars generated`,
+            );
+          }
+
+          if (progress.type === "tool_ready") {
+            process.stdout.write("\n");
+            console.log(
+              `prepare> ${progress.call.name} ready — waiting for host execution`,
+            );
+          }
+          return;
+        }
+
         if (
           event.type === "model_end" &&
           activeTextStep === event.context.step
@@ -218,11 +237,11 @@ const result = await measure.assert(
           process.stdout.write("\n");
         }
         if (event.type === "tool_start") {
-          console.log(`tool> ${event.call.name} started`);
+          console.log(`execute> ${event.call.name} started`);
         }
         if (event.type === "tool_end") {
           console.log(
-            `tool> ${event.call.name} ${event.result.isError ? "failed" : "finished"}`,
+            `execute> ${event.call.name} ${event.result.isError ? "failed" : "finished"}`,
           );
         }
         if (event.type === "stop") {
@@ -236,5 +255,5 @@ const result = await measure.assert(
 if (result === null)
   throw new Error("Streaming demo failed; inspect the trace above.");
 
-console.log("\nFinal recommendation");
-console.log(result.state.completed ?? "No recommendation produced");
+console.log("\nSaved recommendation");
+console.log(result.state.saved?.content ?? "No recommendation produced");

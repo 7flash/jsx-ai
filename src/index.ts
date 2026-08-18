@@ -9,6 +9,7 @@ export type {
   AgentEvent,
   AgentRuntimeProgress,
   AgentTextDelta,
+  AgentToolProgress,
   AgentToolResult,
   AgentToolExecutorResult,
 } from "./agent";

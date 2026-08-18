@@ -4,7 +4,7 @@ import {
   type AgentRuntimeContext,
 } from "../internal/agent-runtime";
 import { jsonSchemaToJson, normalizeToolCall } from "../ir";
-import { StructuredTextDeltaDecoder } from "../internal/structured-text-delta";
+import { StructuredAgentDeltaDecoder } from "../internal/structured-agent-delta";
 import type {
   ExtractedMessage,
   ExtractedPrompt,
@@ -465,15 +465,22 @@ export async function callCodexRuntime(
 
     const schema = outputSchema(prompt);
     const turnNumber = session.turn + 1;
-    const textDecoder = new StructuredTextDeltaDecoder();
+    const deltaDecoder = new StructuredAgentDeltaDecoder();
+    const wantsStructuredProgress = Boolean(
+      runtimeContext?.onTextDelta || runtimeContext?.onToolProgress,
+    );
     const turn = await session.thread.run(bridge.text, {
       ...options,
       outputSchema: schema,
       onProgress: runtimeContext?.onProgress,
-      onTextDelta: runtimeContext?.onTextDelta
+      onTextDelta: wantsStructuredProgress
         ? async (rawDelta) => {
-            const visibleDelta = textDecoder.push(rawDelta);
-            if (visibleDelta) await runtimeContext.onTextDelta?.(visibleDelta);
+            const decoded = deltaDecoder.push(rawDelta);
+            if (decoded.textDelta)
+              await runtimeContext?.onTextDelta?.(decoded.textDelta);
+            for (const progress of decoded.toolProgress) {
+              await runtimeContext?.onToolProgress?.(progress);
+            }
           }
         : undefined,
     });
@@ -481,15 +488,15 @@ export async function callCodexRuntime(
 
     // Some Codex builds may expose only item/completed for structured turns.
     // In that case, still honor the agent text callback once at turn completion.
-    if (runtimeContext?.onTextDelta && !textDecoder.text && structured.text) {
+    if (runtimeContext?.onTextDelta && !deltaDecoder.text && structured.text) {
       await runtimeContext.onTextDelta(structured.text);
     } else if (
       runtimeContext?.onTextDelta &&
-      structured.text.startsWith(textDecoder.text) &&
-      structured.text.length > textDecoder.text.length
+      structured.text.startsWith(deltaDecoder.text) &&
+      structured.text.length > deltaDecoder.text.length
     ) {
       await runtimeContext.onTextDelta(
-        structured.text.slice(textDecoder.text.length),
+        structured.text.slice(deltaDecoder.text.length),
       );
     }
     const toolCalls = normalizedToolCalls(

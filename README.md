@@ -388,29 +388,54 @@ Structured information is available through:
 
 - `LLMResponse` for model text, tool calls, finish reason, usage, and request diagnostics;
 - `AgentRunResult` for cumulative usage, steps, stop reason, tool count, and elapsed time;
-- `runAgent({ onTextDelta, onEvent })` for streamed assistant text plus model/tool lifecycle and optional runtime progress;
+- `runAgent({ onEvent })` for one ordered stream of assistant text, progressive tool construction, and model/tool lifecycle;
+- `onTextDelta` / `onToolProgress` as convenience callbacks when separate handlers are preferable;
 - `registerHook()` for model-call telemetry.
 
 Repository examples use `measure-fn` as a development-only presentation layer. The game builder reports model/tool timing, token usage, generated file sizes, Codex bridge diagnostics, and real intermediate Codex progress while a model step is still running.
 
-### Stream assistant words during an agent run
+### Stream a practical agent UI
 
-The common application UI should not have to choose between an agent API and a text-stream API. Use `runAgent()` once and render two simple surfaces:
-
-- `onTextDelta` — append real assistant-visible words while the current model step is still generating;
-- `onEvent` — show atomic tool lifecycle (`tool_start`, `tool_end`) and completion.
+For an application with tools, use `runAgent()` once. The simplest production interface is one ordered `onEvent` callback. It includes the words the agent is saying, the tool call it is preparing, and the later host execution lifecycle.
 
 ```tsx
+let generatedChars = 0
+let preparedPath = ""
+
 await runAgent({
   history,
   buildPrompt,
   executeTool,
 
-  onTextDelta({ delta }) {
-    chat.appendAssistantText(delta)
-  },
-
   onEvent(event) {
+    if (event.type === "text_delta") {
+      chat.appendAssistantText(event.delta)
+      return
+    }
+
+    if (event.type === "tool_progress") {
+      const progress = event.progress
+
+      if (progress.type === "tool_detected") {
+        chat.setActivity(`Preparing ${progress.name}…`)
+      }
+
+      if (progress.type === "field_ready" && progress.path[0] === "path") {
+        preparedPath = String(progress.value)
+        chat.setActivity(`Preparing ${preparedPath}…`)
+      }
+
+      if (progress.type === "field_delta" && progress.path[0] === "content") {
+        generatedChars += progress.delta.length
+        chat.setActivity(`${preparedPath || "file"} · ${generatedChars} characters generated…`)
+      }
+
+      if (progress.type === "tool_ready") {
+        chat.setActivity(`${progress.call.name} ready`)
+      }
+      return
+    }
+
     if (event.type === "tool_start") {
       chat.setActivity(`Running ${event.call.name}…`)
     }
@@ -426,32 +451,46 @@ await runAgent({
 })
 ```
 
-For Codex, `jsx-ai` receives the in-flight structured response, incrementally decodes only its top-level assistant `text` field, and forwards that decoded text through `onTextDelta`. Tool-call JSON remains private until the whole response has completed and passed schema/tool validation.
+The same ordered callback can be forwarded over SSE or WebSocket after projecting away any application-only context you do not want on the wire. Event handlers are awaited in emission order, so a slow async handler applies backpressure instead of allowing later tool-progress or execution events to overtake earlier text.
 
-Conceptually:
+If an application prefers separate handlers, `onTextDelta` and `onToolProgress` remain convenience callbacks. They receive the same semantic data as `text_delta` and `tool_progress` respectively.
+
+The generation/execution boundary is intentional:
 
 ```text
 model step starts
     │
-    ├── text: "I'll inspect "  ─────→ onTextDelta({ delta: "I'll inspect " })
-    ├── text: "the project."  ─────→ onTextDelta({ delta: "the project." })
+    ├── assistant text ───────────────→ text_delta
     │
-    └── structured toolCalls JSON
-              │
-              │ buffered inside jsx-ai
-              ▼
-         complete + validate
-              │
-              ├── tool_start
-              ├── executeTool()
-              └── tool_end
+    └── tool call being constructed
+          │
+          ├── name complete ─────────→ tool_progress: tool_detected
+          ├── path complete ─────────→ tool_progress: field_ready(path)
+          ├── content chunks ────────→ tool_progress: field_delta(content)
+          ├── content complete ──────→ tool_progress: field_ready(content)
+          │
+          └── complete canonical call
+                    │
+                    └───────────────→ tool_progress: tool_ready
+                                         │
+                          execution boundary
+                                         │
+                                      tool_start
+                                         │
+                                      executeTool()
+                                         │
+                                      tool_end
 ```
 
-The callback never receives partial `toolCalls`, partial `arguments_json`, or partial `write_file.content`. It also never exposes hidden chain-of-thought. Concatenating the text deltas for a successful step reconstructs that step's final visible `response.text`.
+`tool_progress` never executes a tool. It is observability/UI data only. `tool_ready` means the model turn has produced a complete canonical call; actual side effects still begin at `tool_start`.
 
-Codex can additionally emit `runtime_progress` events through `onEvent` for diagnostics such as normalized status/activity/warnings. Those are optional and are not required for a normal chat UI.
+For Codex, `jsx-ai` incrementally decodes the structured response instead of exposing partial JSON. Applications receive semantic events, not fragments such as `{"toolCalls":[{"na`. String argument values can produce `field_delta` events as their decoded contents arrive. A completed primitive/string/object/array argument produces `field_ready`. Nested object/array values are currently surfaced atomically at their top-level argument path.
 
-Runtimes that do not yet expose structured assistant-text deltas still honor the same `onTextDelta` callback by delivering the final visible assistant text once before `model_end`. This keeps the application contract stable while runtime-specific streaming support improves independently.
+A tool may theoretically stream arguments before its `name` field. In that unusual case `field_delta` / `field_ready` identify the tool by `index` and omit `name` until `tool_detected` arrives. Application code should therefore use `index` as the stable in-progress identity and treat `name` on field events as optional until `tool_detected` arrives.
+
+Runtimes that do not yet expose progressive structured-tool data still honor the same event contract at turn completion: `jsx-ai` emits final `tool_detected`, top-level `field_ready`, and `tool_ready` events before execution. Likewise, runtimes without assistant text deltas emit the final visible text once as `text_delta`. This keeps application code runtime-neutral.
+
+`runtime_progress` remains available through `onEvent` for optional provider/runtime diagnostics. A normal product UI does not need it.
 
 Run the practical example:
 
@@ -459,7 +498,7 @@ Run the practical example:
 bun run example:streaming
 ```
 
-It shows assistant text arriving while each model step is running, followed by atomic host-tool events.
+It uses only `onEvent` and shows assistant words arriving, a tool becoming visible while its fields are generated, and the later atomic host execution as separate phases.
 
 ### Plain text streaming without an agent
 
@@ -478,7 +517,8 @@ for await (const chunk of streamLLM([
 Use this rule of thumb:
 
 ```text
-structured agent with tools  → runAgent({ onTextDelta, onEvent })
+structured agent with tools  → runAgent({ onEvent })
+separate callback style      → onTextDelta + onToolProgress (optional convenience)
 plain text generation        → streamLLM()
 ```
 
@@ -602,7 +642,7 @@ Small runtime-neutral text example using `streamLLM(messages)`. Under Codex it p
 
 ### `examples/streaming-agent.tsx`
 
-Minimal two-step structured agent showing the common UI contract: `onTextDelta` renders assistant words as they arrive while `tool_start` / `tool_end` remain atomic. Codex runtime-progress events remain available as optional diagnostics.
+Practical structured-agent UI using one ordered `onEvent` stream: `text_delta` for assistant words, `tool_progress` for a tool/field being prepared, and atomic `tool_start` / `tool_end` for actual host execution. The example counts generated content characters without printing the tool payload itself.
 
 ### `examples/game-builder-agent.tsx`
 
