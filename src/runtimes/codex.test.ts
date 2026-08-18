@@ -16,6 +16,7 @@ interface FakeTurn {
   response?: string;
   deltas?: readonly string[];
   progress?: string;
+  items?: readonly Record<string, unknown>[];
   usage?: {
     inputTokens?: number;
     cachedInputTokens?: number;
@@ -149,6 +150,21 @@ class FakeAppServerProcess extends EventEmitter {
           },
         });
         return;
+      }
+
+      for (const item of config.items ?? []) {
+        const started = {
+          ...item,
+          status: item.status === "completed" ? "inProgress" : item.status,
+        };
+        this.send({
+          method: "item/started",
+          params: { threadId, turnId, item: started },
+        });
+        this.send({
+          method: "item/completed",
+          params: { threadId, turnId, item },
+        });
       }
 
       const response =
@@ -476,6 +492,16 @@ describe("Codex unified app-server runtime", () => {
             toolCalls: [{ name: "list_files", arguments_json: "{}" }],
           }),
           progress: "Inspecting the project structure",
+          items: [
+            {
+              id: "image_1",
+              type: "imageGeneration",
+              status: "completed",
+              revisedPrompt: "A tiny test sprite",
+              result: "aGVsbG8=",
+              savedPath: "C:/fake/.codex/generated_images/image_1.png",
+            },
+          ],
           usage: {
             inputTokens: 100,
             cachedInputTokens: 40,
@@ -540,6 +566,12 @@ describe("Codex unified app-server runtime", () => {
     expect(
       progress.some((message) =>
         message.includes("Inspecting the project structure"),
+      ),
+    ).toBe(true);
+    expect(progress).toContain("activity:Codex image generation started");
+    expect(
+      progress.some((message) =>
+        message.includes("status:Codex image generation completed"),
       ),
     ).toBe(true);
     expect(capture.children[0]?.exitCode).toBe(0);

@@ -349,6 +349,52 @@ Codex is the first runtime wired to canonical local-image attachments. API runti
 
 Within one Codex `runAgent()` invocation, attachments follow the same delta-history rule as text: an image is sent when its message is newly appended, not re-sent on every later turn. If history is rewritten and the native thread must resynchronize, the required attachments are sent again with that fresh thread.
 
+### Codex built-in image generation
+
+Codex can expose a built-in `$imagegen` / `image_gen` capability when using ChatGPT-authenticated Codex. This is a Codex runtime capability, not a portable jsx-ai host tool, so the dedicated example intentionally selects `runtime: "codex"` instead of pretending every provider has the same built-in.
+
+```bash
+bun run example:image
+```
+
+Or provide an output directory and asset request:
+
+```bash
+bun run example:image ./image-agent-output "Create a friendly 2D robot companion sprite concept"
+```
+
+The example demonstrates a complete visual loop without an OpenAI API key:
+
+```text
+Codex built-in image_gen
+        │
+        ▼
+completed imageGeneration item
+        │
+        ├── result base64 ────────┐
+        └── savedPath (fallback)  │
+                                  ▼
+                         host saves candidate PNG
+                                  │
+                                  ▼
+                       review_latest_image
+                                  │
+                                  ▼
+                     canonical image attachment
+                                  │
+                                  ▼
+                      next Codex model step
+                     visually inspects candidate
+                                  │
+                         regenerate or done
+```
+
+The host captures the completed App Server `imageGeneration` item and writes the PNG itself. It prefers the returned base64 `result` and only falls back to `savedPath`, so the example does not depend on Codex successfully persisting `$CODEX_HOME/generated_images/...` on every platform/build. The agent then gets that host-owned PNG back through the normal multimodal tool-result attachment path.
+
+The example keeps Codex itself in a read-only sandbox: image generation is runtime-owned, while publishing the captured PNG into the example workspace is a host-side effect. It also deliberately rejects `done` until the latest candidate has been returned through `review_latest_image` and therefore observed on a later model step.
+
+Built-in image generation availability is controlled by Codex/model/account capability. If your local Codex build does not expose `image_gen`, the example reports that failure instead of silently switching to the API-key image-generation CLI fallback.
+
 Use `render()` when you want to inspect the normalized prompt without sending a model request:
 
 ```tsx
@@ -661,7 +707,7 @@ Prefer error identity/codes over parsing message strings.
 
 ## Examples
 
-All examples are runtime-neutral and intentionally observable.
+General examples are runtime-neutral and intentionally observable. `example:image` is intentionally Codex-specific because it demonstrates a Codex built-in capability rather than a portable host tool.
 
 ```bash
 bun run example:coding
@@ -669,6 +715,7 @@ bun run example:skills
 bun run example:runtime
 bun run example:text-stream
 bun run example:streaming
+bun run example:image
 bun run example:game
 ```
 
@@ -685,6 +732,10 @@ Small runtime-neutral text example using `streamLLM(messages)`. Under Codex it p
 ### `examples/streaming-agent.tsx`
 
 Practical structured-agent UI using one ordered `onEvent` stream: `text_delta` for assistant words, `tool_progress` for a tool/field being prepared, and atomic `tool_start` / `tool_end` for actual host execution. The example counts generated content characters without printing the tool payload itself.
+
+### `examples/codex-image-agent.tsx`
+
+Small Codex-specific image agent using the built-in `$imagegen` capability. It captures the completed image-generation result into a host-owned PNG, returns that file as a canonical image attachment, and makes Codex visually review the candidate before it can finish. This exercises image generation and image recognition in one short loop without an `OPENAI_API_KEY`.
 
 ### `examples/game-builder-agent.tsx`
 
@@ -729,6 +780,7 @@ example:skills   skill discovery/resolution
 example:runtime      recommended runtime-neutral host-tool agent
 example:text-stream  visible assistant text-delta stream (API or Codex)
 example:streaming    practical streamed agent UI: text deltas + atomic tools
+example:image        Codex built-in image generation + visual self-review
 example:game         multi-phase observable game-building agent
 bench            end-to-end strategy benchmark
 ```

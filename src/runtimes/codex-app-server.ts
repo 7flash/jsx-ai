@@ -532,11 +532,40 @@ function progressFromNotification(
       commandExecution: "Codex command started",
       fileChange: "Codex file-change item started",
       webSearch: "Codex web search started",
+      imageGeneration: "Codex image generation started",
+      imageView: "Codex image inspection started",
       mcpToolCall: "Codex MCP tool call started",
     };
     const message = itemType ? labels[itemType] : undefined;
     if (!message) return undefined;
     return { runtime: "codex", kind: "activity", message, itemType, elapsedMs };
+  }
+
+  if (event.method === "item/completed" && isRecord(params?.item)) {
+    const item = params.item;
+    if (item.type === "imageGeneration") {
+      const status =
+        typeof item.status === "string" ? item.status : "completed";
+      const savedPath = conciseText(item.savedPath, 180);
+      if (status === "completed") {
+        return {
+          runtime: "codex",
+          kind: "status",
+          message: savedPath
+            ? `Codex image generation completed: ${savedPath}`
+            : "Codex image generation completed",
+          itemType: "imageGeneration",
+          elapsedMs,
+        };
+      }
+      return {
+        runtime: "codex",
+        kind: "warning",
+        message: `Codex image generation ${status}`,
+        itemType: "imageGeneration",
+        elapsedMs,
+      };
+    }
   }
 
   return undefined;
