@@ -2,12 +2,17 @@
 // This replaces React's createElement — every supported intrinsic tag becomes a JsxAiNode.
 
 import { jsonObject, jsonValue, record } from "./internal/json";
-import { normalizeJsonSchema, normalizeToolParametersSchema } from "./ir";
+import {
+  normalizeJsonSchema,
+  normalizeMessageAttachments,
+  normalizeToolParametersSchema,
+} from "./ir";
 import type {
   JsxAiNode,
   JsonObject,
   JsonSchemaType,
   JsonValue,
+  MessageAttachment,
   MessageNode,
   ParamNode,
   PromptNode,
@@ -126,11 +131,19 @@ function messageNode(
   }
   const toolCalls =
     props.toolCalls === undefined ? undefined : toolCallArray(props.toolCalls);
+  const attachments =
+    props.attachments === undefined
+      ? undefined
+      : normalizeMessageAttachments(
+          props.attachments as readonly MessageAttachment[],
+          "<message> attachments",
+        );
   return {
     type: "message",
     props: {
       role,
       ...(toolCalls ? { toolCalls } : {}),
+      ...(attachments?.length ? { attachments } : {}),
       ...(typeof props.toolCallId === "string"
         ? { toolCallId: props.toolCallId }
         : {}),
@@ -360,6 +373,7 @@ declare global {
         toolCallId?: string;
         toolName?: string;
         isError?: boolean;
+        attachments?: readonly import("./types").MessageAttachment[];
         children?: JsxChild;
       };
       system: { children?: JsxChild };

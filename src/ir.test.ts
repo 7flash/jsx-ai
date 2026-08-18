@@ -213,4 +213,68 @@ describe("canonical prompt IR", () => {
       }),
     ).toThrow(/orphaned tool result/);
   });
+  test("normalizes local image attachments and allows image-only user messages", () => {
+    const prompt = normalizePromptIR({
+      tools: [],
+      messages: [
+        {
+          role: "user",
+          content: "",
+          attachments: [
+            {
+              type: "image",
+              path: ".agent/screenshots/game.png",
+              mimeType: "image/png",
+              alt: "Current game viewport",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(prompt.messages[0]?.attachments?.[0]).toEqual({
+      type: "image",
+      path: ".agent/screenshots/game.png",
+      mimeType: "image/png",
+      alt: "Current game viewport",
+    });
+    expect(Object.isFrozen(prompt.messages[0]?.attachments)).toBe(true);
+    expect(Object.isFrozen(prompt.messages[0]?.attachments?.[0])).toBe(true);
+
+    expect(() =>
+      normalizePromptIR({
+        tools: [],
+        messages: [
+          {
+            role: "user",
+            content: "see this",
+            attachments: [
+              { type: "image", path: "x.png", mimeType: "text/plain" },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(/image\/\*/);
+  });
+
+  test("preserves tool-result attachments through JSX extraction", () => {
+    const tree = jsx("prompt", {
+      children: [
+        jsx("message", {
+          role: "assistant",
+          toolCalls: [{ id: "shot-1", name: "game_snapshot", args: {} }],
+          children: "",
+        }),
+        jsx("message", {
+          role: "tool",
+          toolCallId: "shot-1",
+          toolName: "game_snapshot",
+          attachments: [{ type: "image", path: "shot.png" }],
+          children: "",
+        }),
+      ],
+    });
+    const prompt = extract(tree);
+    expect(prompt.messages[1]?.attachments?.[0]?.path).toBe("shot.png");
+  });
 });

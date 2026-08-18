@@ -198,6 +198,7 @@ function Conversation({ history }: { history: readonly ExtractedMessage[] }) {
           toolCallId={message.toolCallId}
           toolName={message.toolName}
           isError={message.isError}
+          attachments={message.attachments}
         >
           {message.content}
         </message>
@@ -306,6 +307,47 @@ Tool calls are not flattened into prose. Canonical history retains assistant too
 ```
 
 Provider-specific metadata required for later turns can round-trip opaquely through the canonical call without leaking into application tool semantics.
+
+### Multimodal agent history
+
+Canonical user and tool-result messages may carry local image attachments alongside their text. This is the foundation for browser screenshots, visual references, image-search results, and generated assets:
+
+```ts
+return {
+  content: "Current game after holding ArrowRight for two seconds.",
+  attachments: [
+    {
+      type: "image",
+      path: ".agent/screenshots/movement-004.png",
+      mimeType: "image/png",
+      alt: "Running game viewport after movement test",
+    },
+  ],
+}
+```
+
+`runAgent()` appends that as a normal canonical tool result. On the next Codex model step, `jsx-ai` sends the new attachment as a native App Server `localImage` input while retaining the text/tool-result pairing in canonical history. Relative paths are resolved against `callOptions.codex.workingDirectory` when set, otherwise the current process directory.
+
+When JSX renders canonical history back into the next prompt, preserve attachments just like tool-call fields:
+
+```tsx
+<message
+  role={message.role}
+  toolCalls={message.toolCalls}
+  toolCallId={message.toolCallId}
+  toolName={message.toolName}
+  isError={message.isError}
+  attachments={message.attachments}
+>
+  {message.content}
+</message>
+```
+
+Image-only user/tool observations are valid (`content: ""` plus at least one attachment). Assistant messages do not accept attachments; generated images should enter history through an application tool result.
+
+Codex is the first runtime wired to canonical local-image attachments. API runtime currently fails clearly when attachments are present instead of silently discarding them; provider-specific multimodal lowering can be added without changing the canonical message shape.
+
+Within one Codex `runAgent()` invocation, attachments follow the same delta-history rule as text: an image is sent when its message is newly appended, not re-sent on every later turn. If history is rewritten and the native thread must resynchronize, the required attachments are sent again with that fresh thread.
 
 Use `render()` when you want to inspect the normalized prompt without sending a model request:
 

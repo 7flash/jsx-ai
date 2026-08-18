@@ -1,3 +1,4 @@
+import { resolve as resolvePath } from "node:path";
 import { JsxAiError } from "../errors";
 import {
   addAgentRuntimeCleanup,
@@ -10,10 +11,12 @@ import type {
   ExtractedPrompt,
   JsonObject,
   LLMResponse,
+  MessageAttachment,
   ToolCall,
 } from "../types";
 import {
   CodexAppServerRuntime,
+  type CodexAppServerInput,
   type CodexAppServerThread,
   type CodexAppServerUsage,
 } from "./codex-app-server";
@@ -46,6 +49,7 @@ interface CodexBridgeInput {
   mode: CodexBridgeMode;
   text: string;
   messagesSent: number;
+  attachments: readonly MessageAttachment[];
 }
 
 interface CodexStructuredCall {
@@ -115,6 +119,26 @@ function sameToolRequest(
   });
 }
 
+function messageAttachments(
+  messages: readonly ExtractedMessage[],
+): MessageAttachment[] {
+  return messages.flatMap((message) => message.attachments ?? []);
+}
+
+function codexTurnInput(
+  bridge: CodexBridgeInput,
+  options?: CodexRuntimeCallOptions,
+): CodexAppServerInput[] {
+  const cwd = options?.codex?.workingDirectory ?? process.cwd();
+  return [
+    { type: "text", text: bridge.text },
+    ...bridge.attachments.map((attachment) => ({
+      type: "localImage" as const,
+      path: resolvePath(cwd, attachment.path),
+    })),
+  ];
+}
+
 function deltaPromptText(
   messages: readonly ExtractedMessage[],
   contract?: JsonObject,
@@ -129,6 +153,7 @@ function deltaPromptText(
       : "Continue the same jsx-ai agent conversation using only the new host messages below.",
     "Do not perform declared application tools yourself. Return the structured assistant response required by the output schema.",
     "Tool-result messages are observations from application tools you requested in your previous response.",
+    "Any local images attached to this turn correspond in order to attachment records in newMessages.",
     "Do not repeat completed host actions unless the new messages require them.",
     "",
     JSON.stringify(payload, null, 2),
@@ -144,6 +169,7 @@ function bridgeInput(
       mode: "initial",
       text: canonicalPromptText(prompt),
       messagesSent: prompt.messages.length,
+      attachments: messageAttachments(prompt.messages),
     };
   }
 
@@ -152,6 +178,7 @@ function bridgeInput(
       mode: "resync",
       text: canonicalPromptText(prompt),
       messagesSent: prompt.messages.length,
+      attachments: messageAttachments(prompt.messages),
     };
   }
 
@@ -176,6 +203,7 @@ function bridgeInput(
     mode: contractChanged ? "contract-update" : "delta",
     text: deltaPromptText(delta, contract),
     messagesSent: delta.length,
+    attachments: messageAttachments(delta),
   };
 }
 
@@ -266,9 +294,27 @@ function messageForCodex(message: ExtractedMessage): JsonObject {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       ...(message.isError ? { isError: true } : {}),
+      ...(message.attachments?.length
+        ? { attachments: message.attachments.map(attachmentForCodex) }
+        : {}),
     };
   }
-  return { role: "user", content: message.content };
+  return {
+    role: "user",
+    content: message.content,
+    ...(message.attachments?.length
+      ? { attachments: message.attachments.map(attachmentForCodex) }
+      : {}),
+  };
+}
+
+function attachmentForCodex(attachment: MessageAttachment): JsonObject {
+  return {
+    type: attachment.type,
+    path: attachment.path,
+    ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+    ...(attachment.alt ? { alt: attachment.alt } : {}),
+  };
 }
 
 function toolForCodex(tool: ExtractedPrompt["tools"][number]): JsonObject {
@@ -291,6 +337,7 @@ function canonicalPromptText(prompt: ExtractedPrompt): string {
   return [
     "You are the model backend for jsx-ai. Treat the JSON below as the complete canonical prompt.",
     "Do not perform the declared application tools yourself. They belong to the host application.",
+    "Any local images attached to this turn correspond in order to attachment records in the canonical conversation.",
     "Decide only what the assistant should say and which application tools it should request next.",
     "Return the structured response required by the output schema.",
     "For each requested tool, copy its exact declared name and put a valid JSON object in arguments_json.",
@@ -460,6 +507,7 @@ export async function callCodexRuntime(
         mode: "resync",
         text: canonicalPromptText(prompt),
         messagesSent: prompt.messages.length,
+        attachments: messageAttachments(prompt.messages),
       };
     }
 
@@ -469,7 +517,7 @@ export async function callCodexRuntime(
     const wantsStructuredProgress = Boolean(
       runtimeContext?.onTextDelta || runtimeContext?.onToolProgress,
     );
-    const turn = await session.thread.run(bridge.text, {
+    const turn = await session.thread.run(codexTurnInput(bridge, options), {
       ...options,
       outputSchema: schema,
       onProgress: runtimeContext?.onProgress,
@@ -522,6 +570,7 @@ export async function callCodexRuntime(
         bridgeMode: bridge.mode,
         bridgePromptChars: bridge.text.length,
         bridgeMessagesSent: bridge.messagesSent,
+        bridgeAttachmentsSent: bridge.attachments.length,
         items: turn.items,
         usage: turn.usage ?? null,
         finalResponse: turn.finalResponse,
@@ -539,6 +588,8 @@ export async function callCodexRuntime(
           bridgePromptChars: bridge.text.length,
           bridgeMessagesSent: bridge.messagesSent,
           bridgeMessagesTotal: prompt.messages.length,
+          bridgeAttachmentsSent: bridge.attachments.length,
+          bridgeAttachmentsTotal: messageAttachments(prompt.messages).length,
           prompt: bridge.text,
           outputSchema: schema,
         },

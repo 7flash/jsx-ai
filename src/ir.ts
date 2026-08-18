@@ -8,6 +8,7 @@ import type {
   JsonSchema,
   JsonSchemaType,
   JsonValue,
+  MessageAttachment,
   PreparedPrompt,
   ToolCall,
   ToolParametersSchema,
@@ -30,6 +31,7 @@ export interface PromptMessageInput {
   readonly toolCallId?: string;
   readonly toolName?: string;
   readonly isError?: boolean;
+  readonly attachments?: readonly MessageAttachment[];
 }
 
 export interface PromptIRInput {
@@ -95,6 +97,40 @@ function optionalString(value: unknown, context: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") fail(context, "must be a string");
   return value;
+}
+
+/** Normalize and freeze canonical message attachments. */
+export function normalizeMessageAttachments(
+  value: readonly MessageAttachment[] | undefined,
+  context = "attachments",
+): readonly MessageAttachment[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) fail(context, "must be an array");
+  const attachments = value.map((attachment, index) => {
+    if (!isRecord(attachment))
+      fail(`${context}[${index}]`, "must be an object");
+    if (attachment.type !== "image")
+      fail(`${context}[${index}].type`, 'must be "image"');
+    const path = nonEmptyString(attachment.path, `${context}[${index}].path`);
+    const mimeType = optionalString(
+      attachment.mimeType,
+      `${context}[${index}].mimeType`,
+    );
+    if (
+      mimeType !== undefined &&
+      !mimeType.toLowerCase().startsWith("image/")
+    ) {
+      fail(`${context}[${index}].mimeType`, "must be an image/* MIME type");
+    }
+    const alt = optionalString(attachment.alt, `${context}[${index}].alt`);
+    return Object.freeze({
+      type: "image" as const,
+      path,
+      ...(mimeType ? { mimeType } : {}),
+      ...(alt ? { alt } : {}),
+    });
+  });
+  return Object.freeze(attachments);
 }
 
 function finiteNumber(value: unknown, context: string): number | undefined {
@@ -494,6 +530,10 @@ function normalizeMessage(
     typeof message.content === "string"
       ? message.content
       : fail(`messages[${index}].content`, "must be a string");
+  const attachments = normalizeMessageAttachments(
+    message.attachments,
+    `messages[${index}].attachments`,
+  );
 
   if (message.role === "user") {
     if (
@@ -507,20 +547,28 @@ function normalizeMessage(
         "user messages cannot contain tool-call/result fields",
       );
     }
-    if (!content.trim())
-      fail(`messages[${index}]`, "user messages must contain text");
-    return Object.freeze({ role: "user", content });
+    if (!content.trim() && !attachments?.length)
+      fail(
+        `messages[${index}]`,
+        "user messages must contain text or attachments",
+      );
+    return Object.freeze({
+      role: "user",
+      content,
+      ...(attachments?.length ? { attachments } : {}),
+    });
   }
 
   if (message.role === "assistant") {
     if (
       message.toolCallId !== undefined ||
       message.toolName !== undefined ||
-      message.isError !== undefined
+      message.isError !== undefined ||
+      attachments?.length
     ) {
       fail(
         `messages[${index}]`,
-        "assistant messages cannot contain tool-result fields",
+        "assistant messages cannot contain tool-result fields or attachments",
       );
     }
     const toolCalls = message.toolCalls?.map((call, callIndex) =>
@@ -568,6 +616,7 @@ function normalizeMessage(
       toolCallId,
       toolName,
       ...(message.isError ? { isError: true } : {}),
+      ...(attachments?.length ? { attachments } : {}),
     });
   }
 

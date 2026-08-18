@@ -232,6 +232,7 @@ function promptTree(history: readonly ExtractedMessage[]) {
           toolCallId={message.toolCallId}
           toolName={message.toolName}
           isError={message.isError}
+          attachments={message.attachments}
         >
           {message.content}
         </message>

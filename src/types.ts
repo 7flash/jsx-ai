@@ -6,6 +6,18 @@ export interface JsonObject {
   [key: string]: JsonValue;
 }
 
+/** Provider-neutral local attachment carried with a canonical message. */
+export interface ImageAttachment {
+  readonly type: "image";
+  /** Local filesystem path. Relative paths are resolved by the runtime working directory. */
+  readonly path: string;
+  readonly mimeType?: string;
+  /** Optional human-readable context included in text-only diagnostics/bridges. */
+  readonly alt?: string;
+}
+
+export type MessageAttachment = ImageAttachment;
+
 export type JsonSchemaType =
   "null" | "boolean" | "object" | "array" | "number" | "integer" | "string";
 
@@ -132,6 +144,7 @@ export interface MessageNode {
     readonly toolCallId?: string;
     readonly toolName?: string;
     readonly isError?: boolean;
+    readonly attachments?: readonly MessageAttachment[];
     readonly children?: JsxAiNode | JsxAiNode[] | string;
   };
 }
@@ -174,6 +187,7 @@ export interface ExtractedTool {
 export interface UserPromptMessage {
   readonly role: "user";
   readonly content: string;
+  readonly attachments?: readonly MessageAttachment[];
   readonly toolCalls?: never;
   readonly toolCallId?: never;
   readonly toolName?: never;
@@ -183,6 +197,7 @@ export interface UserPromptMessage {
 export interface AssistantPromptMessage {
   readonly role: "assistant";
   readonly content: string;
+  readonly attachments?: never;
   readonly toolCalls?: readonly CanonicalToolCall[];
   readonly toolCallId?: never;
   readonly toolName?: never;
@@ -192,6 +207,7 @@ export interface AssistantPromptMessage {
 export interface ToolResultPromptMessage {
   readonly role: "tool";
   readonly content: string;
+  readonly attachments?: readonly MessageAttachment[];
   readonly toolCallId: string;
   readonly toolName: string;
   readonly isError?: boolean;

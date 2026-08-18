@@ -365,6 +365,17 @@ export async function callLLM(
     }
   }
 
+  const imageAttachmentCount = extracted.messages.reduce(
+    (total, message) => total + (message.attachments?.length ?? 0),
+    0,
+  );
+  if (imageAttachmentCount > 0) {
+    throw new JsxAiError(
+      "INVALID_ARGUMENT",
+      `API runtime does not yet support canonical image attachments (${imageAttachmentCount} present). Use runtime="codex" for multimodal agent history.`,
+    );
+  }
+
   if (!config.model) {
     throw new JsxAiError(
       "INVALID_ARGUMENT",

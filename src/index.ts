@@ -51,6 +51,8 @@ export type {
   JsonPrimitive,
   JsonValue,
   JsonObject,
+  ImageAttachment,
+  MessageAttachment,
   JsonSchemaType,
   JsonSchema,
   ToolParametersSchema,
@@ -86,6 +88,7 @@ export { extract } from "./render";
 export {
   normalizeJsonSchema,
   normalizeToolParametersSchema,
+  normalizeMessageAttachments,
   normalizePromptIR,
   normalizeToolCall,
   normalizePreparedPrompt,

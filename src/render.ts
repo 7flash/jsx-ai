@@ -158,6 +158,9 @@ function extractMessage(
     ...(node.props.toolCallId ? { toolCallId: node.props.toolCallId } : {}),
     ...(node.props.toolName ? { toolName: node.props.toolName } : {}),
     ...(node.props.isError ? { isError: true } : {}),
+    ...(node.props.attachments?.length
+      ? { attachments: node.props.attachments }
+      : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "jsx-ai",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Composable JSX for structured LLM calls, tools, and agent loops across provider APIs and Codex",
   "type": "module",
   "main": "src/index.ts",
