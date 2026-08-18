@@ -53,7 +53,7 @@ function parseJsonValue(source: string): JsonValue | undefined {
 }
 
 /**
- * Incrementally parses the decoded `arguments_json` object for one tool call.
+ * Incrementally parses one tool-call argument object from the structured response.
  *
  * String values emit `field_delta` while they are being decoded. Every top-level
  * argument emits exactly one `field_ready` once its JSON value is complete.
@@ -74,6 +74,10 @@ class JsonObjectFieldProgressDecoder {
   private compositeDepth = 0;
   private compositeInString = false;
   private compositeEscaped = false;
+
+  get complete(): boolean {
+    return this.state === "done";
+  }
 
   push(
     chunk: string,
@@ -273,11 +277,14 @@ class JsonObjectFieldProgressDecoder {
     if (this.decodingUnicode) {
       this.unicode += char;
       if (this.unicode.length < 4) return undefined;
+      if (!/^[0-9A-Fa-f]{4}$/.test(this.unicode)) {
+        throw new Error(`Invalid JSON unicode escape: \\u${this.unicode}`);
+      }
       const code = Number.parseInt(this.unicode, 16);
       this.decodingUnicode = false;
       this.unicode = "";
       this.escaped = false;
-      return Number.isFinite(code) ? String.fromCharCode(code) : "";
+      return String.fromCharCode(code);
     }
 
     if (this.escaped) {
@@ -287,7 +294,11 @@ class JsonObjectFieldProgressDecoder {
         return undefined;
       }
       this.escaped = false;
-      return ESCAPES[char] ?? char;
+      const decoded = ESCAPES[char];
+      if (decoded === undefined) {
+        throw new Error(`Invalid JSON escape: \\${char}`);
+      }
+      return decoded;
     }
 
     if (char === "\\") {
@@ -295,6 +306,9 @@ class JsonObjectFieldProgressDecoder {
       return undefined;
     }
     if (char === '"') return null;
+    if (char.charCodeAt(0) <= 0x1f) {
+      throw new Error("Invalid unescaped control character in JSON string");
+    }
     return char;
   }
 }
@@ -309,6 +323,7 @@ type OuterState =
   | "tool_key"
   | "tool_colon"
   | "tool_value"
+  | "tool_arguments"
   | "tool_after_value"
   | "skip_primitive"
   | "skip_nested"
@@ -322,8 +337,9 @@ type ReturnState = "root_after_value" | "tool_after_value";
  * Incrementally decodes jsx-ai's Codex structured-response envelope.
  *
  * Only semantic information is exposed: visible assistant text, discovered tool
- * names, decoded string-field deltas inside `arguments_json`, and completed
- * argument fields. Raw partial JSON is never returned to application code.
+ * names, decoded string-field deltas inside direct `arguments` objects, and completed
+ * argument fields. Legacy `arguments_json` responses are still decoded defensively.
+ * Raw partial JSON is never returned to application code.
  */
 export class StructuredAgentDeltaDecoder {
   private state: OuterState = "before_root";
@@ -352,22 +368,22 @@ export class StructuredAgentDeltaDecoder {
     let textDelta = "";
     const toolProgress: StructuredToolProgress[] = [];
 
-    const flushArguments = () => {
-      if (
-        !this.argumentsDecodedBuffer ||
-        !this.argumentsDecoder ||
-        this.toolIndex < 0
-      )
-        return;
-      const decoded = this.argumentsDecodedBuffer;
-      this.argumentsDecodedBuffer = "";
-      for (const event of this.argumentsDecoder.push(decoded)) {
+    const emitArgumentProgress = (source: string) => {
+      if (!source || !this.argumentsDecoder || this.toolIndex < 0) return;
+      for (const event of this.argumentsDecoder.push(source)) {
         toolProgress.push({
           ...event,
           index: this.toolIndex,
           ...(this.toolName ? { name: this.toolName } : {}),
         });
       }
+    };
+
+    const flushLegacyArguments = () => {
+      if (!this.argumentsDecodedBuffer) return;
+      const decoded = this.argumentsDecodedBuffer;
+      this.argumentsDecodedBuffer = "";
+      emitArgumentProgress(decoded);
     };
 
     for (const char of chunk) {
@@ -377,7 +393,7 @@ export class StructuredAgentDeltaDecoder {
 
         if (decoded === null) {
           const mode = this.stringMode;
-          if (mode === "arguments_json") flushArguments();
+          if (mode === "arguments_json") flushLegacyArguments();
           this.stringMode = undefined;
           this.resetStringDecoder();
 
@@ -416,6 +432,12 @@ export class StructuredAgentDeltaDecoder {
       }
 
       if (this.state === "done") continue;
+
+      if (this.state === "tool_arguments") {
+        emitArgumentProgress(char);
+        if (this.argumentsDecoder?.complete) this.state = "tool_after_value";
+        continue;
+      }
 
       if (this.state === "skip_nested") {
         if (this.skipInString) {
@@ -513,7 +535,7 @@ export class StructuredAgentDeltaDecoder {
       if (this.state === "tool_key") {
         if (/\s/.test(char) || char === ",") continue;
         if (char === "}") {
-          flushArguments();
+          flushLegacyArguments();
           this.state = "tool_array";
           continue;
         }
@@ -534,7 +556,18 @@ export class StructuredAgentDeltaDecoder {
           this.startString("tool_name", "tool_after_value");
           continue;
         }
+        if (this.currentKey === "arguments" && char === "{") {
+          this.argumentsDecoder = new JsonObjectFieldProgressDecoder();
+          emitArgumentProgress(char);
+          this.state = this.argumentsDecoder.complete
+            ? "tool_after_value"
+            : "tool_arguments";
+          continue;
+        }
         if (this.currentKey === "arguments_json" && char === '"') {
+          // Backward-compatible read path for responses produced by older jsx-ai
+          // Codex contracts. New contracts emit `arguments` as an object directly.
+          this.argumentsDecoder = new JsonObjectFieldProgressDecoder();
           this.startString("arguments_json", "tool_after_value");
           continue;
         }
@@ -548,13 +581,13 @@ export class StructuredAgentDeltaDecoder {
           this.currentKey = "";
           this.state = "tool_key";
         } else if (char === "}") {
-          flushArguments();
+          flushLegacyArguments();
           this.state = "tool_array";
         }
       }
     }
 
-    flushArguments();
+    flushLegacyArguments();
     return { textDelta, toolProgress };
   }
 
@@ -592,11 +625,14 @@ export class StructuredAgentDeltaDecoder {
     if (this.decodingUnicode) {
       this.unicode += char;
       if (this.unicode.length < 4) return undefined;
+      if (!/^[0-9A-Fa-f]{4}$/.test(this.unicode)) {
+        throw new Error(`Invalid JSON unicode escape: \\u${this.unicode}`);
+      }
       const code = Number.parseInt(this.unicode, 16);
       this.decodingUnicode = false;
       this.unicode = "";
       this.escaped = false;
-      return Number.isFinite(code) ? String.fromCharCode(code) : "";
+      return String.fromCharCode(code);
     }
 
     if (this.escaped) {
@@ -606,7 +642,11 @@ export class StructuredAgentDeltaDecoder {
         return undefined;
       }
       this.escaped = false;
-      return ESCAPES[char] ?? char;
+      const decoded = ESCAPES[char];
+      if (decoded === undefined) {
+        throw new Error(`Invalid JSON escape: \\${char}`);
+      }
+      return decoded;
     }
 
     if (char === "\\") {
@@ -614,6 +654,9 @@ export class StructuredAgentDeltaDecoder {
       return undefined;
     }
     if (char === '"') return null;
+    if (char.charCodeAt(0) <= 0x1f) {
+      throw new Error("Invalid unescaped control character in JSON string");
+    }
     return char;
   }
 }
