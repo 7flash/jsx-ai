@@ -395,6 +395,58 @@ The example keeps Codex itself in a read-only sandbox: image generation is runti
 
 Built-in image generation availability is controlled by Codex/model/account capability. If your local Codex build does not expose `image_gen`, the example reports that failure instead of silently switching to the API-key image-generation CLI fallback.
 
+
+### Browserbase visual game QA
+
+The Browserbase example combines Codex reasoning/vision with one recorded remote Chromium session. Browserbase is the browser infrastructure only; the example deliberately does **not** use Stagehand or another model inside Browserbase, so there is no second browser-agent model competing with Codex.
+
+```bash
+BROWSERBASE_API_KEY=... \
+BROWSERBASE_GAME_URL=https://your-public-game.example \
+bun run example:browserbase
+```
+
+`BROWSERBASE_GAME_URL` must be reachable from Browserbase's cloud browser. `localhost` on your machine is not the Browserbase browser's localhost; use a deployed preview/public URL or expose local development through a tunnel you control.
+
+The public agent loop stays semantic:
+
+```text
+game_open
+   ↓
+game_snapshot ────────────────┐
+   │                          │ PNG attachment
+   │                          ▼
+   │                    next Codex turn sees it
+   ▼
+game_press / game_click / game_wait
+   ↓
+game_snapshot ────────────────┐
+   │                          │ screenshot + console/page/network diagnostics
+   │                          ▼
+   │                    Codex compares what changed
+   ▼
+done
+```
+
+The host tools are intentionally small:
+
+```text
+game_open
+game_press(key, holdMs?)
+game_click(x, y)
+game_wait(ms)
+game_snapshot(label)
+done(summary)
+```
+
+`game_snapshot` captures the current viewport into a host-owned PNG and returns it through the normal canonical image-attachment path. The same observation also includes Browserbase/Playwright evidence that is useful when pixels alone are ambiguous: console warnings/errors, uncaught page errors, failed requests, current URL/title/viewport, and an ARIA snapshot when available. Canvas-heavy games may expose little useful ARIA structure, so the screenshot remains the primary visual evidence.
+
+Browserbase's current Playwright quickstart notes that Bun does not support Playwright. The example therefore remains a Bun/TSX jsx-ai agent while spawning a tiny Node sidecar for `@browserbasehq/sdk` + `playwright-core`. The sidecar is an implementation detail: the application still runs one command, and `runAgent()` still owns the model/tool loop.
+
+The Browserbase API key is injected into that sidecar only. The example removes `BROWSERBASE_API_KEY` from the parent environment before the Codex process is created, so model-executed commands do not inherit the browser credential. Game URLs sent back to the model are also stripped of query/hash credentials.
+
+A Browserbase session is opened once and reused for the entire agent run, which also gives you a Browserbase live debugger/session recording for post-run inspection. The sidecar closes the CDP client and requests session release during cleanup.
+
 Use `render()` when you want to inspect the normalized prompt without sending a model request:
 
 ```tsx
@@ -707,7 +759,7 @@ Prefer error identity/codes over parsing message strings.
 
 ## Examples
 
-General examples are runtime-neutral and intentionally observable. `example:image` is intentionally Codex-specific because it demonstrates a Codex built-in capability rather than a portable host tool.
+General examples are runtime-neutral and intentionally observable. `example:image` and `example:browserbase` are intentionally Codex-specific because they demonstrate Codex-native vision/image behavior; the Browserbase example additionally requires a Browserbase account/API key.
 
 ```bash
 bun run example:coding
@@ -716,6 +768,7 @@ bun run example:runtime
 bun run example:text-stream
 bun run example:streaming
 bun run example:image
+bun run example:browserbase
 bun run example:game
 ```
 
@@ -736,6 +789,11 @@ Practical structured-agent UI using one ordered `onEvent` stream: `text_delta` f
 ### `examples/codex-image-agent.tsx`
 
 Small Codex-specific image agent using the built-in `$imagegen` capability. It captures the completed image-generation result into a host-owned PNG, returns that file as a canonical image attachment, and makes Codex visually review the candidate before it can finish. This exercises image generation and image recognition in one short loop without an `OPENAI_API_KEY`.
+
+
+### `examples/browserbase-game-agent.tsx`
+
+Codex visual-QA agent for a Browserbase-hosted Chromium session. It opens one configured game URL, captures an initial screenshot, exercises keyboard/mouse controls, captures a post-interaction screenshot plus browser diagnostics, and requires visual evidence before completion. The paired `browserbase-game-worker.mjs` is a Node/Playwright sidecar so the main jsx-ai agent can continue running under Bun.
 
 ### `examples/game-builder-agent.tsx`
 
@@ -781,6 +839,7 @@ example:runtime      recommended runtime-neutral host-tool agent
 example:text-stream  visible assistant text-delta stream (API or Codex)
 example:streaming    practical streamed agent UI: text deltas + atomic tools
 example:image        Codex built-in image generation + visual self-review
+example:browserbase  Codex visual QA through Browserbase + Playwright screenshots
 example:game         multi-phase observable game-building agent
 bench            end-to-end strategy benchmark
 ```

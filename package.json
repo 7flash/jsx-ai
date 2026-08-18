@@ -1,6 +1,6 @@
 {
   "name": "jsx-ai",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Composable JSX for structured LLM calls, tools, and agent loops across provider APIs and Codex",
   "type": "module",
   "main": "src/index.ts",
@@ -22,7 +22,8 @@
     "example:runtime": "bun run examples/runtime-agent.tsx",
     "example:streaming": "bun run examples/streaming-agent.tsx",
     "example:text-stream": "bun run examples/text-stream.ts",
-    "example:image": "bun run examples/codex-image-agent.tsx"
+    "example:image": "bun run examples/codex-image-agent.tsx",
+    "example:browserbase": "bun run examples/browserbase-game-agent.tsx"
   },
   "files": [
     "src",
@@ -38,7 +39,8 @@
     "gemini",
     "openai",
     "anthropic",
-    "codex"
+    "codex",
+    "browserbase"
   ],
   "license": "MIT",
   "repository": {
@@ -51,7 +53,9 @@
     "typescript": "^5.8.3",
     "@types/node": "^22.0.0",
     "measure-fn": "^3.11.2",
-    "@openai/codex": "^0.146.0"
+    "@openai/codex": "^0.146.0",
+    "@browserbasehq/sdk": "^2.6.0",
+    "playwright-core": "^1.62.0"
   },
   "peerDependencies": {
     "@openai/codex": ">=0.145.0 <1"
