@@ -23,7 +23,7 @@
     "example:streaming": "bun run examples/streaming-agent.tsx",
     "example:text-stream": "bun run examples/text-stream.ts",
     "example:image": "bun run examples/codex-image-agent.tsx",
-    "example:browserbase": "bun run examples/browserbase-game-agent.tsx"
+    "example:stagehand": "bun run examples/stagehand-game-agent.tsx"
   },
   "files": [
     "src",
@@ -40,7 +40,7 @@
     "openai",
     "anthropic",
     "codex",
-    "browserbase"
+    "stagehand"
   ],
   "license": "MIT",
   "repository": {
@@ -54,8 +54,7 @@
     "@types/node": "^22.0.0",
     "measure-fn": "^3.11.2",
     "@openai/codex": "^0.146.0",
-    "@browserbasehq/sdk": "^2.6.0",
-    "playwright-core": "^1.62.0"
+    "@browserbasehq/stagehand": "^3.7.0"
   },
   "peerDependencies": {
     "@openai/codex": ">=0.145.0 <1"
