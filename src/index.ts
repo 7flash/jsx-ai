@@ -115,3 +115,22 @@ export type {
   CodexWebSearchMode,
   CodexApprovalPolicy,
 } from "./runtimes/codex";
+
+export {
+  StagehandBrowserController,
+  StagehandBrowserTools,
+  attachStagehandBrowser,
+  createStagehandBrowserTools,
+  fetchBrowserbaseLiveUrls,
+  launchBrowserbaseStagehand,
+  launchLocalStagehand,
+} from "./browser/stagehand";
+export type {
+  BrowserbaseLiveUrls,
+  BrowserSessionInfo,
+  LaunchBrowserbaseStagehandOptions,
+  LaunchLocalStagehandOptions,
+  StagehandBrowserControllerOptions,
+  StagehandBrowserToolOptions,
+  StagehandBrowserToolset,
+} from "./browser/stagehand";

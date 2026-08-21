@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
-    "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts"
+    "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
+    "./browser": "./src/browser/index.ts"
   },
   "scripts": {
     "test": "bun test",
@@ -23,7 +24,8 @@
     "example:streaming": "bun run examples/streaming-agent.tsx",
     "example:text-stream": "bun run examples/text-stream.ts",
     "example:image": "bun run examples/codex-image-agent.tsx",
-    "example:stagehand": "bun run examples/stagehand-game-agent.tsx"
+    "example:stagehand": "bun run examples/stagehand-game-agent.tsx",
+    "example:browser": "bun run examples/stagehand-v4-codex-agent.tsx"
   },
   "files": [
     "src",
@@ -54,13 +56,17 @@
     "@types/node": "^22.0.0",
     "measure-fn": "^3.11.2",
     "@openai/codex": "^0.146.0",
-    "@browserbasehq/stagehand": "^3.7.0"
+    "@browserbasehq/stagehand": "^4.0.1"
   },
   "peerDependencies": {
-    "@openai/codex": ">=0.145.0 <1"
+    "@openai/codex": ">=0.145.0 <1",
+    "@browserbasehq/stagehand": ">=4 <5"
   },
   "peerDependenciesMeta": {
     "@openai/codex": {
+      "optional": true
+    },
+    "@browserbasehq/stagehand": {
       "optional": true
     }
   }
