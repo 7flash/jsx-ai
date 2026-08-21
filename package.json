@@ -1,6 +1,6 @@
 {
   "name": "jsx-ai",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "Composable JSX for structured LLM calls, tools, and agent loops across provider APIs and Codex",
   "type": "module",
   "main": "src/index.ts",
@@ -24,7 +24,7 @@
     "example:streaming": "bun run examples/streaming-agent.tsx",
     "example:text-stream": "bun run examples/text-stream.ts",
     "example:image": "bun run examples/codex-image-agent.tsx",
-    "example:stagehand": "bun run examples/stagehand-game-agent.tsx",
+    "example:stagehand": "bun run examples/stagehand-v4-codex-agent.tsx",
     "example:browser": "bun run examples/stagehand-v4-codex-agent.tsx"
   },
   "files": [

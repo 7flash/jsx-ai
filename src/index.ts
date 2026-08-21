@@ -120,6 +120,7 @@ export {
   StagehandBrowserController,
   StagehandBrowserTools,
   attachStagehandBrowser,
+  createLocalStagehandBrowserTools,
   createStagehandBrowserTools,
   fetchBrowserbaseLiveUrls,
   launchBrowserbaseStagehand,
@@ -127,10 +128,23 @@ export {
 } from "./browser/stagehand";
 export type {
   BrowserbaseLiveUrls,
+  BrowserImageCaptureOptions,
+  BrowserImageFrame,
+  CreateLocalStagehandBrowserToolsOptions,
+  BrowserEvent,
   BrowserSessionInfo,
+  BrowserSessionInfoOptions,
+  BrowserSessionPageInfo,
   LaunchBrowserbaseStagehandOptions,
   LaunchLocalStagehandOptions,
   StagehandBrowserControllerOptions,
   StagehandBrowserToolOptions,
   StagehandBrowserToolset,
 } from "./browser/stagehand";
+
+export { startLocalBrowserScreencast } from "./browser/screencast";
+export type {
+  BrowserFrameSource,
+  LocalBrowserScreencast,
+  LocalBrowserScreencastOptions,
+} from "./browser/screencast";

@@ -3,11 +3,10 @@
 
 import { resolve } from "node:path";
 import {
-  createStagehandBrowserTools,
-  launchBrowserbaseStagehand,
-  launchLocalStagehand,
+  createLocalStagehandBrowserTools,
   md,
   runAgent,
+  startLocalBrowserScreencast,
 } from "../src/index";
 import type {
   AgentToolResult,
@@ -16,10 +15,6 @@ import type {
 } from "../src/index";
 
 const START_URL = process.env.BROWSER_URL?.trim() || "https://example.com";
-const BROWSER_MODE =
-  process.env.BROWSER_MODE?.trim().toLowerCase() === "local"
-    ? "local"
-    : "browserbase";
 const TASK =
   process.argv[2]?.trim() ||
   "Inspect the page, explain what it offers, interact only when useful, and verify important visual changes with screenshots.";
@@ -57,41 +52,47 @@ function textArg(call: CanonicalToolCall, name: string): string {
 }
 
 const initialOrigin = new URL(START_URL).origin;
-const browser =
-  BROWSER_MODE === "local"
-    ? await launchLocalStagehand({
-        artifactDir: ARTIFACT_DIR,
-        allowedOrigins: [initialOrigin],
-        browserOptions: {
-          headless: process.env.BROWSER_HEADLESS?.trim() !== "false",
-        },
-        onEvent: (event) => console.log(`browser> ${JSON.stringify(event)}`),
-      })
-    : await launchBrowserbaseStagehand({
-        artifactDir: ARTIFACT_DIR,
-        allowedOrigins: [initialOrigin],
-        keepAlive: false,
-        onEvent: (event) => console.log(`browser> ${JSON.stringify(event)}`),
-      });
-const browserTools = createStagehandBrowserTools(browser);
+const headless = ["1", "true", "yes"].includes(
+  process.env.BROWSER_HEADLESS?.trim().toLowerCase() || "",
+);
+const browserTools = await createLocalStagehandBrowserTools({
+  artifactDir: ARTIFACT_DIR,
+  allowedOrigins: [initialOrigin],
+  browserOptions: { headless },
+  onEvent: (event) => console.log(`browser> ${JSON.stringify(event)}`),
+});
 const BrowserTools = browserTools.Tools;
 const state: State = { done: false };
+const screencastEnabled = !["0", "false", "no"].includes(
+  process.env.BROWSER_SCREENCAST?.trim().toLowerCase() || "",
+);
+let screencast:
+  Awaited<ReturnType<typeof startLocalBrowserScreencast>> | undefined;
+try {
+  screencast = screencastEnabled
+    ? await startLocalBrowserScreencast(browserTools.controller, {
+        port: Number(process.env.BROWSER_SCREENCAST_PORT || 0),
+        fps: Number(process.env.BROWSER_SCREENCAST_FPS || 4),
+        quality: Number(process.env.BROWSER_SCREENCAST_QUALITY || 72),
+      })
+    : undefined;
+} catch (error) {
+  await browserTools.close();
+  throw error;
+}
 
-const session = await browser.sessionInfo();
 console.log(
   [
-    "jsx-ai Stagehand v4 + Codex browser agent",
-    `browser mode: ${BROWSER_MODE}`,
+    "jsx-ai local Stagehand v4 + Codex browser agent",
+    "browser: local Chromium + Stagehand v4 deterministic controls",
+    `window: ${headless ? "headless" : "visible (live local view)"}`,
     `start: ${START_URL}`,
     `artifacts: ${ARTIFACT_DIR}`,
-    session.sessionId
-      ? `session: ${session.sessionId}`
-      : "session: unavailable",
-    session.liveViewUrl
-      ? `private live view: ${session.liveViewUrl}`
-      : "private live view: unavailable",
+    `screencast: ${screencast?.url ?? "disabled"}`,
     "",
-    "Codex is the only reasoning/vision layer. Stagehand is used for deterministic browser primitives.",
+    "The screencast is a loopback-only host viewer; its JPEG frames are not sent to Codex.",
+    "No Browserbase API key or Playwright sidecar is used.",
+    "Codex is the only reasoning/vision layer; screenshots are returned as image attachments.",
   ].join("\n"),
 );
 
@@ -172,5 +173,6 @@ try {
   );
   if (result.state.summary) console.log(`result: ${result.state.summary}`);
 } finally {
+  await screencast?.close();
   await browserTools.close();
 }

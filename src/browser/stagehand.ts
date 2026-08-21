@@ -12,11 +12,20 @@ import type {
 type MaybePromise<T> = T | Promise<T>;
 type UnknownRecord = Record<string, unknown>;
 
-type BrowserEvent =
+export interface BrowserSessionPageInfo {
+  id: string;
+  url: string;
+  title: string;
+  liveViewUrl: string;
+  debuggerUrl: string;
+}
+
+export type BrowserEvent =
   | { type: "navigate"; url: string }
   | { type: "snapshot"; url: string; chars: number }
   | { type: "screenshot"; url: string; path: string; bytes: number }
-  | { type: "action"; action: string; url: string };
+  | { type: "action"; action: string; url: string }
+  | { type: "session"; session: BrowserSessionInfo };
 
 export interface StagehandBrowserToolOptions {
   /** Prefix for all tool names. Defaults to `browser`. */
@@ -50,6 +59,15 @@ export interface LaunchLocalStagehandOptions {
   onEvent?: StagehandBrowserControllerOptions["onEvent"];
 }
 
+/**
+ * One-call local setup for the normal jsx-ai browser-agent path.
+ * No Browserbase account or API key is involved.
+ */
+export interface CreateLocalStagehandBrowserToolsOptions extends LaunchLocalStagehandOptions {
+  /** Optional tool-name customization passed to createStagehandBrowserTools(). */
+  tools?: StagehandBrowserToolOptions;
+}
+
 export interface LaunchBrowserbaseStagehandOptions {
   apiKey?: string;
   apiUrl?: string;
@@ -67,6 +85,7 @@ export interface BrowserbaseLiveUrls {
   debuggerFullscreenUrl: string;
   debuggerUrl: string;
   wsUrl?: string;
+  pages: readonly BrowserSessionPageInfo[];
 }
 
 export interface BrowserSessionInfo {
@@ -74,11 +93,40 @@ export interface BrowserSessionInfo {
   dashboardUrl?: string;
   liveViewUrl?: string;
   debuggerUrl?: string;
+  pages?: readonly BrowserSessionPageInfo[];
+}
+
+export interface BrowserSessionInfoOptions {
+  /** Refresh Browserbase's live-view metadata instead of using the cached response. */
+  refresh?: boolean;
+}
+
+export interface BrowserImageCaptureOptions {
+  /** Image encoding. JPEG is useful for host-side live streams; PNG is used for Codex attachments. */
+  type?: "png" | "jpeg";
+  /** JPEG quality from 0-100. Ignored for PNG. Defaults to 72 for JPEG. */
+  quality?: number;
+  /** Capture the full scrollable page instead of only the current viewport. */
+  fullPage?: boolean;
+}
+
+export interface BrowserImageFrame {
+  bytes: Uint8Array;
+  mimeType: "image/png" | "image/jpeg";
+  url: string;
+  title: string;
+  capturedAt: number;
 }
 
 export interface StagehandBrowserToolset {
   Tools: () => JsxAiNode;
   executeTool: (call: CanonicalToolCall) => Promise<AgentToolResult>;
+  /** Host-only Browserbase session/live-view metadata. This is never exposed as a model tool. */
+  sessionInfo: (
+    options?: BrowserSessionInfoOptions,
+  ) => Promise<BrowserSessionInfo>;
+  /** Refresh per-tab Browserbase live-view URLs, useful after popups/new tabs. */
+  refreshSessionInfo: () => Promise<BrowserSessionInfo>;
   controller: StagehandBrowserController;
   close: () => Promise<void>;
 }
@@ -108,6 +156,8 @@ interface PageLike {
 }
 
 interface ContextLike {
+  activePage?: () => MaybePromise<unknown>;
+  active_page?: () => MaybePromise<unknown>;
   pages?: () => MaybePromise<unknown[]>;
   newPage?: () => Promise<unknown>;
   new_page?: () => Promise<unknown>;
@@ -465,10 +515,34 @@ export async function fetchBrowserbaseLiveUrls(
   ) {
     throw new Error("Browserbase live-view response is missing debugger URLs");
   }
+  const pages = Array.isArray(data.pages)
+    ? data.pages.flatMap((value) => {
+        const page = record(value);
+        if (
+          typeof page?.id !== "string" ||
+          typeof page?.url !== "string" ||
+          typeof page?.title !== "string" ||
+          typeof page?.debuggerFullscreenUrl !== "string" ||
+          typeof page?.debuggerUrl !== "string"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: page.id,
+            url: page.url,
+            title: page.title,
+            liveViewUrl: page.debuggerFullscreenUrl,
+            debuggerUrl: page.debuggerUrl,
+          } satisfies BrowserSessionPageInfo,
+        ];
+      })
+    : [];
   return {
     debuggerFullscreenUrl: data.debuggerFullscreenUrl,
     debuggerUrl: data.debuggerUrl,
     ...(typeof data.wsUrl === "string" ? { wsUrl: data.wsUrl } : {}),
+    pages,
   };
 }
 
@@ -506,10 +580,12 @@ export class StagehandBrowserController {
     return sessionIdOf(this.browser);
   }
 
-  async sessionInfo(): Promise<BrowserSessionInfo> {
+  async sessionInfo(
+    options: BrowserSessionInfoOptions = {},
+  ): Promise<BrowserSessionInfo> {
     const sessionId = this.sessionId;
     if (!sessionId) return {};
-    if (!this.liveUrls && this.browserbaseApiKey) {
+    if ((options.refresh || !this.liveUrls) && this.browserbaseApiKey) {
       try {
         this.liveUrls = await fetchBrowserbaseLiveUrls(
           this.browserbaseApiKey,
@@ -520,30 +596,55 @@ export class StagehandBrowserController {
         // Live-view lookup is host observability only; browser control remains usable.
       }
     }
-    return {
+    const session: BrowserSessionInfo = {
       sessionId,
       dashboardUrl: `https://www.browserbase.com/sessions/${encodeURIComponent(sessionId)}`,
       ...(this.liveUrls
         ? {
             liveViewUrl: this.liveUrls.debuggerFullscreenUrl,
             debuggerUrl: this.liveUrls.debuggerUrl,
+            pages: this.liveUrls.pages,
           }
         : {}),
     };
+    await this.emit({ type: "session", session });
+    return session;
+  }
+
+  /** Refresh Browserbase's per-tab live-view URLs for host-side screencast UIs. */
+  refreshSessionInfo(): Promise<BrowserSessionInfo> {
+    return this.sessionInfo({ refresh: true });
   }
 
   private async emit(event: BrowserEvent): Promise<void> {
-    await this.onEvent?.(event);
+    try {
+      await this.onEvent?.(event);
+    } catch {
+      // Host-side observability must never turn an already-executed browser action into a retryable failure.
+    }
   }
 
   private async activePage(): Promise<PageLike> {
     const context = this.browser.context;
-    if (!context || typeof context.pages !== "function") {
-      throw new Error("Stagehand browser context does not expose pages()");
+    if (!context)
+      throw new Error(
+        "Stagehand browser handle does not expose browser.context",
+      );
+
+    if (typeof context.activePage === "function") {
+      const active = await context.activePage();
+      if (active) return asPage(active);
     }
-    const pages = await context.pages();
-    const existing = pages[pages.length - 1];
-    if (existing) return asPage(existing);
+    if (typeof context.active_page === "function") {
+      const active = await context.active_page();
+      if (active) return asPage(active);
+    }
+
+    if (typeof context.pages === "function") {
+      const pages = await context.pages();
+      const existing = pages[pages.length - 1];
+      if (existing) return asPage(existing);
+    }
     if (typeof context.newPage === "function")
       return asPage(await context.newPage());
     if (typeof context.new_page === "function")
@@ -787,30 +888,56 @@ export class StagehandBrowserController {
     return { content: `Navigated back.\nCurrent URL: ${url}` };
   }
 
+  /** Capture the active page as raw image bytes for host-side viewers or other integrations. */
+  async captureImage(
+    options: BrowserImageCaptureOptions = {},
+  ): Promise<BrowserImageFrame> {
+    const page = await this.activePage();
+    if (typeof page.screenshot !== "function")
+      throw new Error("Stagehand page does not expose screenshot()");
+
+    const type = options.type ?? "png";
+    const quality = Math.max(
+      0,
+      Math.min(100, Math.round(options.quality ?? 72)),
+    );
+    const bytes = await page.screenshot({
+      type,
+      fullPage: options.fullPage ?? false,
+      animations: "disabled",
+      ...(type === "jpeg" ? { quality } : {}),
+    });
+    const url = redactUrl(await this.pageUrl(page));
+    return {
+      bytes,
+      mimeType: type === "jpeg" ? "image/jpeg" : "image/png",
+      url,
+      title: await this.pageTitle(page),
+      capturedAt: Date.now(),
+    };
+  }
+
   async screenshot(
     label = "screenshot",
     fullPage = false,
   ): Promise<AgentToolResult> {
-    const page = await this.activePage();
-    if (typeof page.screenshot !== "function")
-      throw new Error("Stagehand page does not expose screenshot()");
-    const bytes = await page.screenshot({
-      type: "png",
-      fullPage,
-      animations: "disabled",
-    });
+    const frame = await this.captureImage({ type: "png", fullPage });
     const index = ++this.screenshotIndex;
     const filename = `${String(index).padStart(3, "0")}-${sanitizeLabel(label)}.png`;
     const path = resolve(this.artifactDir, filename);
-    writeFileSync(path, Buffer.from(bytes));
-    const url = redactUrl(await this.pageUrl(page));
-    await this.emit({ type: "screenshot", url, path, bytes: bytes.byteLength });
+    writeFileSync(path, Buffer.from(frame.bytes));
+    await this.emit({
+      type: "screenshot",
+      url: frame.url,
+      path,
+      bytes: frame.bytes.byteLength,
+    });
     return {
       content: [
         `Screenshot: ${filename}`,
-        `URL: ${url}`,
-        `Title: ${await this.pageTitle(page)}`,
-        `PNG bytes: ${bytes.byteLength}`,
+        `URL: ${frame.url}`,
+        `Title: ${frame.title}`,
+        `PNG bytes: ${frame.bytes.byteLength}`,
         "Inspect the attached screenshot pixels before deciding the next browser action.",
       ].join("\n"),
       attachments: [
@@ -1007,7 +1134,22 @@ export function createStagehandBrowserTools(
   return {
     Tools: () => StagehandBrowserTools({ prefix }),
     executeTool: (call) => controller.executeTool(call, { prefix }),
+    sessionInfo: (sessionOptions) => controller.sessionInfo(sessionOptions),
+    refreshSessionInfo: () => controller.refreshSessionInfo(),
     controller,
     close: () => controller.close(),
   };
+}
+
+/**
+ * Launch local Chromium with Stagehand v4 and return ready-to-pass jsx-ai tools.
+ * This is the recommended local/default integration: no Browserbase API key,
+ * no Playwright sidecar, and no Stagehand reasoning model.
+ */
+export async function createLocalStagehandBrowserTools(
+  options: CreateLocalStagehandBrowserToolsOptions = {},
+): Promise<StagehandBrowserToolset> {
+  const { tools = {}, ...launchOptions } = options;
+  const controller = await launchLocalStagehand(launchOptions);
+  return createStagehandBrowserTools(controller, tools);
 }
