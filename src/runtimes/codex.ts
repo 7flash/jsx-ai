@@ -340,7 +340,7 @@ function canonicalPromptText(prompt: ExtractedPrompt): string {
     "Any local images attached to this turn correspond in order to attachment records in the canonical conversation.",
     "Decide only what the assistant should say and which application tools it should request next.",
     "Return the structured response required by the output schema.",
-    "For each requested tool, copy its exact declared name and put its arguments directly in the arguments object.",
+    "For each requested tool, copy its exact declared name and encode its arguments object as JSON in arguments_json.",
     "If no application tool should be called, return an empty toolCalls array.",
     "Do not claim a host-side action occurred unless the conversation contains its tool result.",
     "",
@@ -374,12 +374,13 @@ function outputSchema(prompt: ExtractedPrompt): JsonObject {
           type: "object",
           properties: {
             name: nameSchema,
-            // Keep tool arguments as structured JSON. Encoding a JSON object inside
-            // a string adds a second escaping layer and is fragile for source code,
-            // regexes, quotes, backslashes, and other large text payloads.
-            arguments: { type: "object" },
+            arguments_json: {
+              type: "string",
+              description:
+                "JSON-encoded object containing the arguments for this tool call",
+            },
           },
-          required: ["name", "arguments"],
+          required: ["name", "arguments_json"],
           additionalProperties: false,
         },
       },
