@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from "fs";
 import { dirname, relative, resolve } from "path";
-import { callLLM, md, runAgent } from "../src/index";
+import { md, runAgent } from "../src/index";
 import type {
   AgentContext,
   AgentRunResult,
@@ -38,13 +38,7 @@ import type {
   JsonValue,
   ToolParametersSchema,
 } from "../src/index";
-import {
-  measure,
-  summarizeResponse,
-  summarizeToolCall,
-  truncate,
-  type MeasureFn,
-} from "./_example-observability";
+import { measure, traceAgent, type MeasureFn } from "./_example-observability";
 
 const MODEL = process.env.GAME_MODEL || "gemini-3-flash-preview";
 const STRATEGY = "hybrid" as const;
@@ -493,87 +487,28 @@ function executeWorkspaceTool(
   }
 }
 
-function summarizeToolResult(
-  message: ExtractedMessage,
-): Record<string, unknown> {
-  if (message.role !== "tool") return { role: message.role };
-  return {
-    tool: message.toolName,
-    error: message.isError ?? false,
-    resultChars: message.content.length,
-    preview: truncate(message.content.replace(/\s+/g, " "), 180),
-  };
-}
-
-function summarizeRun<State>(
-  result: AgentRunResult<State>,
-): Record<string, unknown> {
-  return {
-    reason: result.reason,
-    modelSteps: result.steps.length,
-    toolCalls: result.toolCallsExecuted,
-    elapsedMs: result.elapsedMs,
-    tokens: result.usage,
-  };
-}
-
 function addUsage(target: AgentUsage, usage: AgentUsage): void {
   target.inputTokens += usage.inputTokens;
   target.outputTokens += usage.outputTokens;
   target.thinkingTokens += usage.thinkingTokens;
 }
 
-function measuredCall(trace: MeasureFn, prefix: string): typeof callLLM {
-  let step = 0;
-  return async (tree, options) => {
-    const current = ++step;
-    const response = await trace(
-      {
-        label: `${prefix} model step ${current}`,
-        step: current,
-        model: options?.model ?? MODEL,
-        strategy: options?.strategy ?? STRATEGY,
-        result: summarizeResponse,
-      },
-      () => callLLM(tree, options),
-    );
-
-    if (response === null)
-      throw new Error(
-        `${prefix} model step ${current} failed; see trace above.`,
-      );
-    return response;
-  };
-}
-
 async function planGame(
   trace: MeasureFn,
 ): Promise<{ plan: GamePlan; result: AgentRunResult<PlanningState> }> {
   const state: PlanningState = {};
-  const result = await trace(
-    {
-      label: "Plan game",
-      result: summarizeRun,
-    },
-    async (planTrace: MeasureFn) =>
+  const result = await traceAgent(
+    trace,
+    { label: "Plan game" },
+    async ({ call, measureTool }) =>
       runAgent({
         state,
         history: [{ role: "user", content: IDEA }],
         buildPrompt: (history) => <PlanningPrompt history={history} />,
-        executeTool: async (call, context) => {
-          const output = await planTrace(
-            {
-              label: `Planning tool — ${call.name}`,
-              ...summarizeToolCall(call),
-              result: summarizeToolResult,
-            },
-            async () => executePlanningTool(call, context),
-          );
-          if (output === null)
-            throw new Error(`Planning tool ${call.name} failed inside trace.`);
-          return output;
-        },
-        call: measuredCall(planTrace, "Plan"),
+        executeTool: measureTool(executePlanningTool, {
+          label: "Planning tool",
+        }),
+        call,
         callOptions: {
           model: MODEL,
           strategy: STRATEGY,
@@ -588,7 +523,6 @@ async function planGame(
       }),
   );
 
-  if (result === null) throw new Error("Planning failed; see trace above.");
   if (result.reason !== "completed" || !state.plan) {
     throw new Error(
       `Planning stopped with ${result.reason} without a valid plan.`,
@@ -621,33 +555,20 @@ async function buildMilestone(
         Leave a complete self-contained index.html, then call complete_milestone.
     `;
 
-  const measured = await trace(
+  const result = await traceAgent(
+    trace,
     {
       label: `Milestone ${index + 1} — ${milestone.title}`,
-      milestone: index + 1,
-      cost: milestone.cost,
-      result: summarizeRun,
+      metadata: { milestone: index + 1, cost: milestone.cost },
     },
-    async (milestoneTrace: MeasureFn) =>
+    async ({ call, measureTool }) =>
       runAgent({
         state,
         // Fresh model history per milestone. The filesystem is durable state.
         history: [{ role: "user", content: goal }],
         buildPrompt: (history) => <MilestonePrompt history={history} />,
-        executeTool: async (call, context) => {
-          const output = await milestoneTrace(
-            {
-              label: `Tool — ${call.name}`,
-              ...summarizeToolCall(call),
-              result: summarizeToolResult,
-            },
-            async () => executeWorkspaceTool(call, context),
-          );
-          if (output === null)
-            throw new Error(`Tool ${call.name} failed inside trace.`);
-          return output;
-        },
-        call: measuredCall(milestoneTrace, `Milestone ${index + 1}`),
+        executeTool: measureTool(executeWorkspaceTool),
+        call,
         callOptions: {
           model: MODEL,
           strategy: STRATEGY,
@@ -666,14 +587,12 @@ async function buildMilestone(
       }),
   );
 
-  if (measured === null)
-    throw new Error(`Milestone ${index + 1} failed; see trace above.`);
-  if (measured.reason !== "completed" || !state.completion) {
+  if (result.reason !== "completed" || !state.completion) {
     throw new Error(
-      `Milestone ${index + 1} stopped with ${measured.reason} before validated completion.`,
+      `Milestone ${index + 1} stopped with ${result.reason} before validated completion.`,
     );
   }
-  return measured;
+  return result;
 }
 
 function printPlan(plan: GamePlan): void {
@@ -754,7 +673,7 @@ const totalUsage: AgentUsage = {
 };
 const reports: MilestoneReport[] = [];
 
-const run = await measure(
+const run = await measure.assert(
   {
     label: "Milestone game run",
     model: MODEL,
@@ -776,6 +695,4 @@ const run = await measure(
   },
 );
 
-if (run === null)
-  throw new Error("Milestone game run failed; see measure-fn trace above.");
 printSummary(reports, run.planningResult, totalUsage, Date.now() - startedAt);

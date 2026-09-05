@@ -12,7 +12,7 @@
  * tool parsing can never execute a tool.
  */
 
-import { callLLM, md, runAgent } from "../src/index";
+import { md, runAgent } from "../src/index";
 import type {
   AgentRunResult,
   AgentToolResult,
@@ -20,13 +20,7 @@ import type {
   ExtractedMessage,
   LLMResponse,
 } from "../src/index";
-import {
-  measure,
-  summarizeResponse,
-  summarizeToolCall,
-  truncate,
-  type MeasureFn,
-} from "./_example-observability";
+import { measureAgent, summarizeAgentRun } from "./_example-observability";
 
 interface DemoState {
   saved?: { path: string; content: string };
@@ -106,26 +100,13 @@ function executeTool(
   return { content: `Saved ${content.length} characters to ${path}` };
 }
 
-function summarizeToolResult(result: AgentToolResult): Record<string, unknown> {
-  return {
-    error: result.isError ?? false,
-    resultChars: result.content.length,
-    preview: truncate(result.content.replace(/\s+/g, " "), 160),
-  };
-}
-
 function summarizeRun(
   result: AgentRunResult<DemoState>,
 ): Record<string, unknown> {
-  return {
-    reason: result.reason,
-    modelSteps: result.steps.length,
-    toolCalls: result.toolCallsExecuted,
-    usage: result.usage,
-    elapsedMs: result.elapsedMs,
-    savedPath: result.state.saved?.path ?? "",
-    savedChars: result.state.saved?.content.length ?? 0,
-  };
+  return summarizeAgentRun(result, (state) => ({
+    savedPath: state.saved?.path ?? "",
+    savedChars: state.saved?.content.length ?? 0,
+  }));
 }
 
 console.log(`jsx-ai practical streamed agent
@@ -141,27 +122,13 @@ let activeTextStep = -1;
 let generatedContentChars = 0;
 let preparedPath = "";
 
-const result = await measure.assert(
+const result = await measureAgent(
   {
     label: "Streamed agent demo",
-    result: summarizeRun,
+    summarizeResult: summarizeRun,
   },
-  async (trace: MeasureFn) => {
-    let modelStep = 0;
-    const measuredCall: typeof callLLM = async (tree, options) => {
-      const step = ++modelStep;
-      const response = await trace(
-        {
-          label: `Model step ${step}`,
-          result: summarizeResponse,
-        },
-        () => callLLM(tree, options),
-      );
-      if (response === null) throw new Error(`Model step ${step} failed`);
-      return response;
-    };
-
-    return runAgent({
+  async ({ call, measureTool }) =>
+    runAgent({
       state,
       history: [
         {
@@ -171,19 +138,8 @@ const result = await measure.assert(
         },
       ],
       buildPrompt: (history) => <DemoPrompt history={history} />,
-      executeTool: async (call) => {
-        const toolResult = await trace(
-          {
-            label: `Host tool — ${call.name}`,
-            ...summarizeToolCall(call),
-            result: summarizeToolResult,
-          },
-          async () => executeTool(call, state),
-        );
-        if (toolResult === null) throw new Error(`Tool ${call.name} failed`);
-        return toolResult;
-      },
-      call: measuredCall,
+      executeTool: measureTool((toolCall) => executeTool(toolCall, state)),
+      call,
       maxSteps: 2,
       maxToolCalls: 2,
       maxDurationMs: 2 * 60_000,
@@ -249,12 +205,8 @@ const result = await measure.assert(
           console.log(`agent> stopped (${event.reason})`);
         }
       },
-    });
-  },
+    }),
 );
-
-if (result === null)
-  throw new Error("Streaming demo failed; inspect the trace above.");
 
 console.log("\nSaved recommendation");
 console.log(result.state.saved?.content ?? "No recommendation produced");

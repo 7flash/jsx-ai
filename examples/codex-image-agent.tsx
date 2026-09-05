@@ -26,7 +26,7 @@ import {
   copyFileSync,
 } from "node:fs";
 import { relative, resolve } from "node:path";
-import { callLLM, md, runAgent } from "../src/index";
+import { md, runAgent } from "../src/index";
 import type {
   AgentRunResult,
   AgentToolResult,
@@ -34,14 +34,7 @@ import type {
   ExtractedMessage,
   LLMResponse,
 } from "../src/index";
-import {
-  createRuntimeProgressReporter,
-  measure,
-  summarizeResponse,
-  summarizeToolCall,
-  truncate,
-  type MeasureFn,
-} from "./_example-observability";
+import { measureAgent, summarizeAgentRun } from "./_example-observability";
 
 const ROOT = resolve(process.argv[2] || "image-agent-output");
 const TASK =
@@ -283,27 +276,13 @@ function executeTool(
   return { content: `Unknown tool: ${call.name}`, isError: true };
 }
 
-function summarizeToolResult(result: AgentToolResult): Record<string, unknown> {
-  return {
-    error: result.isError ?? false,
-    resultChars: result.content.length,
-    attachments: result.attachments?.map((attachment) => attachment.path) ?? [],
-    preview: truncate(result.content.replace(/\s+/g, " "), 180),
-  };
-}
-
 function summarizeRun(
   result: AgentRunResult<ImageAgentState>,
 ): Record<string, unknown> {
-  return {
-    reason: result.reason,
-    modelSteps: result.steps.length,
-    hostToolCalls: result.toolCallsExecuted,
-    generations: result.state.generationCount,
-    usage: result.usage,
-    elapsedMs: result.elapsedMs,
-    accepted: result.state.completed?.path ?? "",
-  };
+  return summarizeAgentRun(result, (state) => ({
+    generations: state.generationCount,
+    accepted: state.completed?.path ?? "",
+  }));
 }
 
 console.log(
@@ -322,30 +301,14 @@ const state: ImageAgentState = {
   seenGenerationIds: new Set<string>(),
 };
 
-const result = await measure.assert(
+const result = await measureAgent(
   {
     label: "Codex image agent",
-    workspace: ROOT,
-    result: summarizeRun,
+    metadata: { workspace: ROOT },
+    summarizeResult: summarizeRun,
   },
-  async (trace: MeasureFn) => {
-    let modelStep = 0;
+  async ({ call, measureTool, reportRuntimeProgress }) => {
     let activeTextStep = -1;
-    const reportRuntimeProgress = createRuntimeProgressReporter();
-
-    const measuredCall: typeof callLLM = async (tree, options) => {
-      const step = ++modelStep;
-      const response = await trace(
-        {
-          label: `Model step ${step}`,
-          result: summarizeResponse,
-        },
-        () => callLLM(tree, options),
-      );
-      if (response === null)
-        throw new Error(`Model step ${step} failed; inspect the trace above.`);
-      return response;
-    };
 
     return runAgent({
       state,
@@ -356,20 +319,8 @@ const result = await measure.assert(
         },
       ],
       buildPrompt: (history) => <ImageAgentPrompt history={history} />,
-      executeTool: async (call) => {
-        const toolResult = await trace(
-          {
-            label: `Host tool — ${call.name}`,
-            ...summarizeToolCall(call),
-            result: summarizeToolResult,
-          },
-          async () => executeTool(call, state),
-        );
-        if (toolResult === null)
-          throw new Error(`Host tool ${call.name} failed inside the trace.`);
-        return toolResult;
-      },
-      call: measuredCall,
+      executeTool: measureTool((toolCall) => executeTool(toolCall, state)),
+      call,
       callOptions: {
         runtime: "codex",
         timeoutMs: MODEL_TURN_TIMEOUT_MS,
@@ -437,8 +388,6 @@ const result = await measure.assert(
   },
 );
 
-if (result === null)
-  throw new Error("Codex image agent failed; inspect the trace above.");
 if (result.reason !== "completed" || !result.state.completed) {
   throw new Error(
     `Image agent stopped with ${result.reason} after ${result.steps.length} model step(s). ` +

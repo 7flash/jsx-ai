@@ -32,14 +32,7 @@ import {
   type StagehandGameSession,
   type StagehandSnapshot,
 } from "./_stagehand-game-browser";
-import {
-  createRuntimeProgressReporter,
-  measure,
-  summarizeResponse,
-  summarizeToolCall,
-  truncate,
-  type MeasureFn,
-} from "./_example-observability";
+import { measureAgent, summarizeAgentRun } from "./_example-observability";
 
 const GAME_URL =
   process.env.STAGEHAND_GAME_URL?.trim() || "http://localhost:3001";
@@ -374,28 +367,14 @@ async function executeTool(
   return { content: `Unknown tool: ${call.name}`, isError: true };
 }
 
-function summarizeToolResult(result: AgentToolResult): Record<string, unknown> {
-  return {
-    error: result.isError ?? false,
-    resultChars: result.content.length,
-    attachments: result.attachments?.map((attachment) => attachment.path) ?? [],
-    preview: truncate(result.content.replace(/\s+/g, " "), 180),
-  };
-}
-
 function summarizeRun(
   result: AgentRunResult<GameAgentState>,
 ): Record<string, unknown> {
-  return {
-    reason: result.reason,
-    modelSteps: result.steps.length,
-    hostToolCalls: result.toolCallsExecuted,
-    browserActions: result.state.actions,
-    screenshots: result.state.snapshots,
-    usage: result.usage,
-    elapsedMs: result.elapsedMs,
-    sessionId: result.state.session?.sessionId ?? "",
-  };
+  return summarizeAgentRun(result, (state) => ({
+    browserActions: state.actions,
+    screenshots: state.snapshots,
+    sessionId: state.session?.sessionId ?? "",
+  }));
 }
 
 validateEnvironment();
@@ -415,46 +394,31 @@ console.log(
 
 const browser = new StagehandGameBrowser();
 const state: GameAgentState = { opened: false, actions: 0, snapshots: 0 };
-const reportRuntimeProgress = createRuntimeProgressReporter();
-
 let result: AgentRunResult<GameAgentState>;
 try {
-  const measured = await measure.assert(
-    { label: "Stagehand game QA", result: summarizeRun },
-    async (trace: MeasureFn) => {
-      let modelStep = 0;
-      const measuredCall: typeof callLLM = async (tree, options) => {
-        const step = ++modelStep;
-        const response = await trace(
-          { label: `Model step ${step}`, result: summarizeResponse },
-          () =>
-            callLLM(tree, {
-              ...options,
-              runtime: "codex",
-              timeoutMs: MODEL_TURN_TIMEOUT_MS,
-            }),
-        );
-        if (response === null) throw new Error(`Model step ${step} failed`);
-        return response;
-      };
-
-      return runAgent({
+  result = await measureAgent(
+    {
+      label: "Stagehand game QA",
+      summarizeResult: summarizeRun,
+      llm: {
+        call: (tree, options) =>
+          callLLM(tree, {
+            ...options,
+            runtime: "codex",
+            timeoutMs: MODEL_TURN_TIMEOUT_MS,
+          }),
+        metadata: () => ({ runtime: "codex" }),
+      },
+    },
+    async ({ call, measureTool, reportRuntimeProgress }) =>
+      runAgent({
         state,
         history: [{ role: "user", content: TASK }],
         buildPrompt: (history) => <GameQaPrompt history={history} />,
-        executeTool: async (call) => {
-          const toolResult = await trace(
-            {
-              label: `Host tool — ${call.name}`,
-              ...summarizeToolCall(call),
-              result: summarizeToolResult,
-            },
-            () => executeTool(call, state, browser),
-          );
-          if (toolResult === null) throw new Error(`Tool ${call.name} failed`);
-          return toolResult;
-        },
-        call: measuredCall,
+        executeTool: measureTool((toolCall) =>
+          executeTool(toolCall, state, browser),
+        ),
+        call,
         maxSteps: MAX_STEPS,
         maxToolCalls: MAX_TOOL_CALLS,
         maxDurationMs: MAX_DURATION_MS,
@@ -472,12 +436,8 @@ try {
             );
           }
         },
-      });
-    },
+      }),
   );
-  if (measured === null)
-    throw new Error("Stagehand game-QA agent failed; inspect the trace above.");
-  result = measured;
 } finally {
   await browser.close();
 }

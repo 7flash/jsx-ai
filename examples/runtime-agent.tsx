@@ -19,21 +19,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import { callLLM, md, runAgent } from "../src/index";
+import { md, runAgent } from "../src/index";
 import type {
-  AgentRunResult,
   AgentToolResult,
   CanonicalToolCall,
   ExtractedMessage,
 } from "../src/index";
-import {
-  createRuntimeProgressReporter,
-  measure,
-  summarizeResponse,
-  summarizeToolCall,
-  truncate,
-  type MeasureFn,
-} from "./_example-observability";
+import { measureAgent } from "./_example-observability";
 
 const ROOT = resolve(process.argv[2] || "runtime-output");
 const TASK =
@@ -207,28 +199,6 @@ function executeTool(
   }
 }
 
-function summarizeToolResult(result: AgentToolResult): Record<string, unknown> {
-  return {
-    error: result.isError ?? false,
-    resultChars: result.content.length,
-    preview: truncate(result.content.replace(/\s+/g, " "), 160),
-  };
-}
-
-function summarizeAgentResult(
-  result: AgentRunResult<AgentState>,
-): Record<string, unknown> {
-  return {
-    reason: result.reason,
-    modelSteps: result.steps.length,
-    toolCalls: result.toolCallsExecuted,
-    tokens: result.usage,
-    elapsedMs: result.elapsedMs,
-    files: fileManifest(),
-    summary: result.state.completedSummary ?? "",
-  };
-}
-
 console.log(
   [
     "jsx-ai runtime-neutral agent",
@@ -241,47 +211,22 @@ console.log();
 
 const state: AgentState = {};
 
-const measured = await measure.assert(
+const measured = await measureAgent<AgentState>(
   {
     label: "jsx-ai host-tool agent",
-    workspace: ROOT,
-    result: summarizeAgentResult,
+    metadata: { workspace: ROOT },
+    summarizeState: (runState) => ({
+      files: fileManifest(),
+      summary: runState.completedSummary ?? "",
+    }),
   },
-  async (trace: MeasureFn) => {
-    let modelStep = 0;
-    const reportRuntimeProgress = createRuntimeProgressReporter();
-    const measuredCall: typeof callLLM = async (tree, options) => {
-      const step = ++modelStep;
-      const response = await trace(
-        {
-          label: `Model step ${step}`,
-          result: summarizeResponse,
-        },
-        () => callLLM(tree, options),
-      );
-      if (response === null)
-        throw new Error(`Model step ${step} failed; inspect the trace above.`);
-      return response;
-    };
-
-    return runAgent({
+  async ({ call, measureTool, reportRuntimeProgress }) =>
+    runAgent({
       state,
       history: [{ role: "user", content: TASK }],
       buildPrompt: (history) => <AgentPrompt history={history} />,
-      executeTool: async (call) => {
-        const result = await trace(
-          {
-            label: `Host tool — ${call.name}`,
-            ...summarizeToolCall(call),
-            result: summarizeToolResult,
-          },
-          async () => executeTool(call, state),
-        );
-        if (result === null)
-          throw new Error(`Tool ${call.name} failed inside the example trace.`);
-        return result;
-      },
-      call: measuredCall,
+      executeTool: measureTool((toolCall) => executeTool(toolCall, state)),
+      call,
       maxSteps: MAX_STEPS,
       maxToolCalls: MAX_TOOL_CALLS,
       maxDurationMs: MAX_DURATION_MS,
@@ -296,12 +241,8 @@ const measured = await measure.assert(
           reportRuntimeProgress(event.progress, event.context.step + 1);
         }
       },
-    });
-  },
+    }),
 );
-
-if (measured === null)
-  throw new Error("Agent failed; inspect the trace above.");
 if (measured.reason !== "completed") {
   throw new Error(
     `Agent stopped with ${measured.reason} after ${measured.steps.length} model step(s).`,

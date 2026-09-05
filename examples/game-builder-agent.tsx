@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "fs";
 import { dirname, relative, resolve } from "path";
-import { callLLM, md, runAgent } from "../src/index";
+import { md, runAgent } from "../src/index";
 import type {
   AgentRunResult,
   AgentUsage,
@@ -32,11 +32,9 @@ import type {
   ExtractedMessage,
 } from "../src/index";
 import {
-  createRuntimeProgressReporter,
   measure,
-  summarizeResponse,
-  summarizeToolCall,
-  truncate,
+  summarizeAgentRun,
+  traceAgent,
   type MeasureFn,
 } from "./_example-observability";
 
@@ -241,34 +239,17 @@ function promptTree(history: readonly ExtractedMessage[]) {
   );
 }
 
-function summarizeToolResult(
-  message: ExtractedMessage,
-): Record<string, unknown> {
-  if (message.role !== "tool") return { role: message.role };
-  return {
-    tool: message.toolName,
-    error: message.isError ?? false,
-    resultChars: message.content.length,
-    preview: truncate(message.content.replace(/\s+/g, " "), 150),
-  };
-}
-
 function summarizeAgentResult(
   result: AgentRunResult<undefined>,
 ): Record<string, unknown> {
-  const codexSteps = result.steps.filter(
-    (step) => step.response.request?.url === "codex://local",
+  const codexSteps = result.steps.filter((step) =>
+    step.response.request?.url?.startsWith("codex://"),
   );
   const bridgePromptChars = codexSteps.reduce((total, step) => {
     const value = step.response.request?.body.bridgePromptChars;
     return total + (typeof value === "number" ? value : 0);
   }, 0);
-  return {
-    reason: result.reason,
-    modelSteps: result.steps.length,
-    toolCalls: result.toolCallsExecuted,
-    elapsedMs: result.elapsedMs,
-    tokens: result.usage,
+  return summarizeAgentRun(result, () => ({
     ...(codexSteps.length
       ? {
           codexBridge: {
@@ -278,7 +259,7 @@ function summarizeAgentResult(
         }
       : {}),
     files: fileManifest(),
-  };
+  }));
 }
 
 function addUsage(target: AgentUsage, usage: AgentUsage): void {
@@ -291,64 +272,32 @@ async function runPhase(
   trace: MeasureFn,
   phase: PhaseSpec,
 ): Promise<AgentRunResult<undefined>> {
-  const measured = await trace(
+  return traceAgent(
+    trace,
     {
       label: `Phase ${phase.number} — ${phase.title}`,
-      phase: phase.number,
-      maxSteps: MAX_STEPS,
-      maxToolCalls: MAX_TOOL_CALLS,
-      result: summarizeAgentResult,
+      metadata: {
+        phase: phase.number,
+        maxSteps: MAX_STEPS,
+        maxToolCalls: MAX_TOOL_CALLS,
+      },
+      llm: { metadata: () => ({ strategy: STRATEGY }) },
+      summarizeResult: summarizeAgentResult,
     },
-    async (phaseTrace: MeasureFn) => {
-      let modelStep = 0;
-      const reportRuntimeProgress = createRuntimeProgressReporter();
-      const measuredCall: typeof callLLM = async (tree, options) => {
-        const step = ++modelStep;
-        const response = await phaseTrace(
-          {
-            label: `Model step ${step}`,
-            step,
-            strategy: options?.strategy ?? STRATEGY,
-            result: summarizeResponse,
-          },
-          () => callLLM(tree, options),
-        );
-
-        if (response === null)
-          throw new Error(
-            `Model step ${step} failed; see the measure-fn trace above.`,
-          );
-        return response;
-      };
-
+    async ({ call, measureTool, reportRuntimeProgress }) => {
       const result = await runAgent({
         // Each phase is intentionally a fresh model session. The generated
         // workspace is durable state; a phase may run in a new process days
         // later and inspect the files it needs through the host tools.
         history: [{ role: "user", content: phase.goal }],
         buildPrompt: (phaseHistory) => promptTree(phaseHistory),
-        executeTool: async (call) => {
-          const tool = await phaseTrace(
-            {
-              label: `Tool — ${call.name}`,
-              step: modelStep,
-              ...summarizeToolCall(call),
-              result: summarizeToolResult,
-            },
-            async () => executeTool(call),
-          );
-          if (tool === null)
-            throw new Error(
-              `Tool ${call.name} failed inside the example trace.`,
-            );
-          return tool;
-        },
-        call: measuredCall,
+        executeTool: measureTool(executeTool),
+        call,
         maxSteps: MAX_STEPS,
         maxToolCalls: MAX_TOOL_CALLS,
         maxDurationMs: MAX_PHASE_MS,
         isComplete: (response) =>
-          response.toolCalls.some((call) => call.name === "phase_done"),
+          response.toolCalls.some((toolCall) => toolCall.name === "phase_done"),
         onNoToolCalls: (response) =>
           response.text.trim()
             ? "Continue by using the available tools. Call phase_done only after the phase is implemented."
@@ -368,10 +317,6 @@ async function runPhase(
       return result;
     },
   );
-
-  if (measured === null)
-    throw new Error(`Phase ${phase.number} failed; see the trace above.`);
-  return measured;
 }
 
 function printFinalSummary(
