@@ -23,6 +23,12 @@ interface RpcNotification {
   params?: unknown;
 }
 
+interface RpcServerRequest extends RpcNotification {
+  id: number;
+}
+
+type RpcServerRequestHandler = (request: RpcServerRequest) => Promise<unknown>;
+
 interface CodexLaunch {
   command: string;
   args: string[];
@@ -56,6 +62,33 @@ export interface CodexAppServerTurn {
 export type CodexAppServerInput =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "localImage"; readonly path: string };
+
+export type CodexDynamicToolSpec = JsonObject & {
+  readonly type: "function";
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonObject;
+  readonly deferLoading?: boolean;
+};
+
+export interface CodexDynamicToolCall {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly callId: string;
+  readonly tool: string;
+  readonly namespace?: string | null;
+  readonly arguments: unknown;
+}
+
+export type CodexDynamicToolCallOutputContentItem =
+  | { readonly type: "inputText"; readonly text: string }
+  | { readonly type: "inputImage"; readonly imageUrl: string }
+  | { readonly type: "inputAudio"; readonly audioUrl: string };
+
+export interface CodexDynamicToolCallResponse {
+  readonly success: boolean;
+  readonly contentItems: readonly CodexDynamicToolCallOutputContentItem[];
+}
 
 function appServerInput(
   input: string | readonly CodexAppServerInput[],
@@ -92,6 +125,9 @@ export interface CodexAppServerTurnOptions extends CodexRuntimeCallOptions {
   outputSchema?: JsonObject;
   onProgress?: (progress: RuntimeProgress) => void | Promise<void>;
   onTextDelta?: (delta: string) => void | Promise<void>;
+  onDynamicToolCall?: (
+    call: CodexDynamicToolCall,
+  ) => CodexDynamicToolCallResponse | Promise<CodexDynamicToolCallResponse>;
 }
 
 type AppServerLauncher = (
@@ -171,6 +207,7 @@ class CodexAppServerClient {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notifications = new NotificationQueue();
+  private serverRequestHandler?: RpcServerRequestHandler;
   private nextId = 1;
   private stderr = "";
   private closed = false;
@@ -216,16 +253,50 @@ class CodexAppServerClient {
 
     if (typeof parsed.method === "string") {
       if (typeof parsed.id === "number") {
-        // jsx-ai deliberately runs Codex as an inference backend. Approval
-        // policy defaults to never, so an unexpected server request is a
-        // protocol/configuration error rather than an interactive prompt.
-        this.write({
+        const request: RpcServerRequest = {
           id: parsed.id,
-          error: {
-            code: -32601,
-            message: `jsx-ai does not service Codex client request ${parsed.method}`,
+          method: parsed.method,
+          ...(parsed.params !== undefined ? { params: parsed.params } : {}),
+        };
+        const handler = this.serverRequestHandler;
+        if (!handler) {
+          // Approval policy defaults to never, so any request not explicitly
+          // handled by the active turn is a protocol/configuration error.
+          this.write({
+            id: parsed.id,
+            error: {
+              code: -32601,
+              message: `jsx-ai does not service Codex client request ${parsed.method}`,
+            },
+          });
+          return;
+        }
+
+        void Promise.resolve(handler(request)).then(
+          (result) => {
+            try {
+              this.write({ id: parsed.id, result });
+            } catch {
+              // The runtime may have been closed while the handler was running.
+            }
           },
-        });
+          (error) => {
+            try {
+              this.write({
+                id: parsed.id,
+                error: {
+                  code: -32603,
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "jsx-ai failed to service Codex client request",
+                },
+              });
+            } catch {
+              // Preserve the original handler failure.
+            }
+          },
+        );
         return;
       }
       this.notifications.push({
@@ -275,6 +346,10 @@ class CodexAppServerClient {
 
   nextNotification(): Promise<RpcNotification> {
     return this.notifications.next();
+  }
+
+  setServerRequestHandler(handler?: RpcServerRequestHandler): void {
+    this.serverRequestHandler = handler;
   }
 
   async close(): Promise<void> {
@@ -387,6 +462,34 @@ function matchingIds(
   return (
     isRecord(params) && params.threadId === threadId && params.turnId === turnId
   );
+}
+
+function dynamicToolCallFromParams(
+  params: unknown,
+  expectedThreadId: string,
+): CodexDynamicToolCall {
+  if (
+    !isRecord(params) ||
+    params.threadId !== expectedThreadId ||
+    typeof params.turnId !== "string" ||
+    typeof params.callId !== "string" ||
+    typeof params.tool !== "string"
+  ) {
+    throw new JsxAiError(
+      "INVALID_RESPONSE",
+      "Codex app-server item/tool/call request was malformed",
+    );
+  }
+  return {
+    threadId: expectedThreadId,
+    turnId: params.turnId,
+    callId: params.callId,
+    tool: params.tool,
+    ...(typeof params.namespace === "string" || params.namespace === null
+      ? { namespace: params.namespace as string | null }
+      : {}),
+    arguments: params.arguments,
+  };
 }
 
 function completedAgentText(
@@ -641,6 +744,9 @@ export class CodexAppServerRuntime {
           title: "jsx-ai",
           version: JSX_AI_VERSION,
         },
+        capabilities: {
+          experimentalApi: true,
+        },
       });
       client.notify("initialized", {});
       return new CodexAppServerRuntime(client);
@@ -654,6 +760,7 @@ export class CodexAppServerRuntime {
     model: string | undefined,
     options?: CodexRuntimeOptions,
     ephemeral = true,
+    dynamicTools?: readonly CodexDynamicToolSpec[],
   ): Promise<CodexAppServerThread> {
     if (this.closed) throw new Error("Codex app-server runtime is closed");
     const result = await this.client.request("thread/start", {
@@ -663,6 +770,7 @@ export class CodexAppServerRuntime {
       approvalPolicy: options?.approvalPolicy ?? "never",
       config: threadConfig(options),
       ephemeral,
+      ...(dynamicTools?.length ? { dynamicTools } : {}),
     });
     return new CodexAppServerThread(
       this,
@@ -682,6 +790,29 @@ export class CodexAppServerRuntime {
     const closeOnAbort = () => void this.close();
     operation.signal.addEventListener("abort", closeOnAbort, { once: true });
     const startedAt = Date.now();
+    let dynamicToolCallCount = 0;
+    let serverRequestError: unknown;
+
+    this.client.setServerRequestHandler(
+      options.onDynamicToolCall
+        ? async (request) => {
+            if (request.method !== "item/tool/call") {
+              throw new JsxAiError(
+                "RUNTIME_ERROR",
+                `jsx-ai does not service Codex client request ${request.method}`,
+              );
+            }
+            const call = dynamicToolCallFromParams(request.params, threadId);
+            dynamicToolCallCount++;
+            try {
+              return await options.onDynamicToolCall!(call);
+            } catch (error) {
+              serverRequestError ??= error;
+              throw error;
+            }
+          }
+        : undefined,
+    );
 
     try {
       const turnResult = await this.client.request("turn/start", {
@@ -705,6 +836,7 @@ export class CodexAppServerRuntime {
       while (true) {
         if (operation.signal.aborted) throw operation.signal.reason;
         const event = await this.client.nextNotification();
+        if (serverRequestError !== undefined) throw serverRequestError;
         events++;
         const elapsedMs = Date.now() - startedAt;
         firstEventMs ??= elapsedMs;
@@ -764,7 +896,7 @@ export class CodexAppServerRuntime {
           if (!completion.done) continue;
           if (completion.error) throw new Error(completion.error);
           const response = finalResponse || deltaText;
-          if (!response) {
+          if (!response && dynamicToolCallCount === 0) {
             throw new JsxAiError(
               "INVALID_RESPONSE",
               "Codex app-server turn completed without an agent message",
@@ -788,6 +920,7 @@ export class CodexAppServerRuntime {
     } catch (error) {
       throwCodexOperationError(error, operation, options.signal);
     } finally {
+      this.client.setServerRequestHandler(undefined);
       operation.signal.removeEventListener("abort", closeOnAbort);
       operation.cleanup();
     }

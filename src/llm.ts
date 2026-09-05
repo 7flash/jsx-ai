@@ -216,7 +216,7 @@ function resolveCall(
     model,
     options?.provider ?? normalized.providerOverride,
   );
-  const apiKey = resolveApiKey(provider, options);
+  const apiKey = resolveApiKey(provider, model, options);
   const prepared = normalizePreparedPrompt(strategy.prepare(normalized));
   return {
     prompt: normalized,
@@ -339,7 +339,7 @@ export async function callLLM(
           prompt.system,
         ),
         runtime: "codex",
-        strategy: "codex-structured",
+        strategy: prompt.tools.length ? "codex-native-tools" : "codex-text",
         tools: prompt.tools.map((tool) => tool.name),
         response: { text: result.text, toolCalls: result.toolCalls },
         usage: result.usage,
@@ -356,7 +356,7 @@ export async function callLLM(
           prompt.system,
         ),
         runtime: "codex",
-        strategy: "codex-structured",
+        strategy: prompt.tools.length ? "codex-native-tools" : "codex-text",
         tools: prompt.tools.map((tool) => tool.name),
         response: { text: "" },
         error: errorMessage(error),
@@ -599,7 +599,7 @@ export async function callText(
     );
   }
   const provider = resolveProvider(model, options?.provider);
-  const apiKey = resolveApiKey(provider, options);
+  const apiKey = resolveApiKey(provider, model, options);
   const request = provider.buildRequest(prepared, model, apiKey);
 
   try {
@@ -731,7 +731,7 @@ export async function* streamLLM(
       `Provider ${provider.name} does not implement streaming`,
     );
   }
-  const apiKey = resolveApiKey(provider, options);
+  const apiKey = resolveApiKey(provider, model, options);
   const request = provider.buildStreamRequest(prepared, model, apiKey);
 
   try {

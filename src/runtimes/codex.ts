@@ -1,11 +1,9 @@
 import { resolve as resolvePath } from "node:path";
-import { JsxAiError } from "../errors";
 import {
   addAgentRuntimeCleanup,
   type AgentRuntimeContext,
 } from "../internal/agent-runtime";
 import { jsonSchemaToJson, normalizeToolCall } from "../ir";
-import { StructuredAgentDeltaDecoder } from "../internal/structured-agent-delta";
 import type {
   ExtractedMessage,
   ExtractedPrompt,
@@ -19,6 +17,8 @@ import {
   type CodexAppServerInput,
   type CodexAppServerThread,
   type CodexAppServerUsage,
+  type CodexDynamicToolCall,
+  type CodexDynamicToolSpec,
 } from "./codex-app-server";
 import type { CodexRuntimeCallOptions } from "./codex-common";
 
@@ -43,6 +43,7 @@ interface CodexAgentSession {
   syncedMessages: readonly ExtractedMessage[];
   contractKey?: string;
   lastResponse?: { text: string; toolCalls: readonly ToolCall[] };
+  requiresResync: boolean;
 }
 
 interface CodexBridgeInput {
@@ -52,23 +53,20 @@ interface CodexBridgeInput {
   attachments: readonly MessageAttachment[];
 }
 
-interface CodexStructuredCall {
-  text: string;
-  toolCalls: Array<{ name: string; args: JsonObject }>;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function codexSessionConfigKey(
   model: string | undefined,
-  options?: CodexRuntimeCallOptions,
+  options: CodexRuntimeCallOptions | undefined,
+  prompt: ExtractedPrompt,
 ): string {
   return JSON.stringify({
     model: model ?? null,
     codex: options?.codex ?? null,
     apiKey: options?.apiKey ? "explicit" : null,
+    dynamicTools: prompt.tools.map(dynamicToolForCodex),
   });
 }
 
@@ -77,10 +75,7 @@ function isCodexAgentSession(value: unknown): value is CodexAgentSession {
 }
 
 function promptContractKey(prompt: ExtractedPrompt): string {
-  return JSON.stringify({
-    system: prompt.system ?? "",
-    applicationTools: prompt.tools.map(toolForCodex),
-  });
+  return JSON.stringify({ system: prompt.system ?? "" });
 }
 
 function sameMessage(left: ExtractedMessage, right: ExtractedMessage): boolean {
@@ -141,18 +136,20 @@ function codexTurnInput(
 
 function deltaPromptText(
   messages: readonly ExtractedMessage[],
-  contract?: JsonObject,
+  updatedSystem?: string,
 ): string {
   const payload: JsonObject = {
-    ...(contract ? { updatedContract: contract } : {}),
+    ...(updatedSystem !== undefined ? { updatedSystem } : {}),
     newMessages: messages.map(messageForCodex),
   };
   return [
-    contract
-      ? "Continue the same jsx-ai agent conversation. The host application contract has changed; the updated contract below supersedes the previous one."
-      : "Continue the same jsx-ai agent conversation using only the new host messages below.",
-    "Do not perform declared application tools yourself. Return the structured assistant response required by the output schema.",
-    "Tool-result messages are observations from application tools you requested in your previous response.",
+    updatedSystem !== undefined
+      ? "Continue the same jsx-ai conversation. The system instruction below supersedes the previous one."
+      : "Continue the same jsx-ai conversation using only the new canonical messages below.",
+    "Application tools are exposed through Codex native dynamic tools; use them directly when needed.",
+    "You may invoke multiple independent application tools in the same turn.",
+    "If a dynamic tool reports that execution is deferred to the host, do not retry it or issue dependent calls in this turn. Finish the turn and wait for the real tool result in the next canonical message.",
+    "Tool-result messages are observations from application tools requested previously.",
     "Any local images attached to this turn correspond in order to attachment records in newMessages.",
     "Do not repeat completed host actions unless the new messages require them.",
     "",
@@ -192,16 +189,13 @@ function bridgeInput(
 
   const nextContractKey = promptContractKey(prompt);
   const contractChanged = session.contractKey !== nextContractKey;
-  const contract = contractChanged
-    ? {
-        system: prompt.system ?? "",
-        applicationTools: prompt.tools.map(toolForCodex),
-      }
-    : undefined;
 
   return {
     mode: contractChanged ? "contract-update" : "delta",
-    text: deltaPromptText(delta, contract),
+    text: deltaPromptText(
+      delta,
+      contractChanged ? (prompt.system ?? "") : undefined,
+    ),
     messagesSent: delta.length,
     attachments: messageAttachments(delta),
   };
@@ -209,18 +203,25 @@ function bridgeInput(
 
 async function createCodexAgentSession(
   model: string | undefined,
-  options?: CodexRuntimeCallOptions,
+  options: CodexRuntimeCallOptions | undefined,
+  prompt: ExtractedPrompt,
 ): Promise<CodexAgentSession> {
   const runtime = await CodexAppServerRuntime.create(options);
   try {
-    const thread = await runtime.startThread(model, options?.codex, true);
+    const thread = await runtime.startThread(
+      model,
+      options?.codex,
+      true,
+      prompt.tools.map(dynamicToolForCodex),
+    );
     return {
       kind: "jsx-ai-codex-agent-session",
-      configKey: codexSessionConfigKey(model, options),
+      configKey: codexSessionConfigKey(model, options, prompt),
       runtime,
       thread,
       turn: 0,
       syncedMessages: [],
+      requiresResync: false,
     };
   } catch (error) {
     await runtime.close();
@@ -231,9 +232,10 @@ async function createCodexAgentSession(
 async function codexAgentSession(
   runtimeContext: AgentRuntimeContext | undefined,
   model: string | undefined,
-  options?: CodexRuntimeCallOptions,
+  options: CodexRuntimeCallOptions | undefined,
+  prompt: ExtractedPrompt,
 ): Promise<{ session: CodexAgentSession; owned: boolean }> {
-  const key = codexSessionConfigKey(model, options);
+  const key = codexSessionConfigKey(model, options, prompt);
   if (
     runtimeContext &&
     isCodexAgentSession(runtimeContext.codex) &&
@@ -247,7 +249,7 @@ async function codexAgentSession(
     runtimeContext.codex = undefined;
   }
 
-  const session = await createCodexAgentSession(model, options);
+  const session = await createCodexAgentSession(model, options, prompt);
   if (!runtimeContext) return { session, owned: true };
 
   runtimeContext.codex = session;
@@ -258,17 +260,20 @@ async function codexAgentSession(
 async function restartCodexThread(
   session: CodexAgentSession,
   model: string | undefined,
-  options?: CodexRuntimeCallOptions,
+  options: CodexRuntimeCallOptions | undefined,
+  prompt: ExtractedPrompt,
 ): Promise<void> {
   session.thread = await session.runtime.startThread(
     model,
     options?.codex,
     true,
+    prompt.tools.map(dynamicToolForCodex),
   );
   session.turn = 0;
   session.syncedMessages = [];
   session.contractKey = undefined;
   session.lastResponse = undefined;
+  session.requiresResync = false;
 }
 
 function messageForCodex(message: ExtractedMessage): JsonObject {
@@ -317,11 +322,14 @@ function attachmentForCodex(attachment: MessageAttachment): JsonObject {
   };
 }
 
-function toolForCodex(tool: ExtractedPrompt["tools"][number]): JsonObject {
+function dynamicToolForCodex(
+  tool: ExtractedPrompt["tools"][number],
+): CodexDynamicToolSpec {
   return {
+    type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: jsonSchemaToJson(tool.parameters),
+    inputSchema: jsonSchemaToJson(tool.parameters),
   };
 }
 
@@ -329,20 +337,17 @@ function canonicalPayload(prompt: ExtractedPrompt): JsonObject {
   return {
     system: prompt.system ?? "",
     conversation: prompt.messages.map(messageForCodex),
-    applicationTools: prompt.tools.map(toolForCodex),
   };
 }
 
 function canonicalPromptText(prompt: ExtractedPrompt): string {
   return [
     "You are the model backend for jsx-ai. Treat the JSON below as the complete canonical prompt.",
-    "Do not perform the declared application tools yourself. They belong to the host application.",
+    "Application tools are exposed through Codex native dynamic tools. Use those tools directly when the system or conversation calls for them.",
+    "You may invoke multiple independent application tools in the same turn.",
+    "If a dynamic tool reports that execution is deferred to the host, treat that as a handoff boundary: do not retry it, do not issue dependent calls whose arguments require its result, and finish this turn without claiming the action completed.",
     "Any local images attached to this turn correspond in order to attachment records in the canonical conversation.",
-    "Decide only what the assistant should say and which application tools it should request next.",
-    "Return the structured response required by the output schema.",
-    "For each requested tool, copy its exact declared name and encode its arguments object as JSON in arguments_json.",
-    "If no application tool should be called, return an empty toolCalls array.",
-    "Do not claim a host-side action occurred unless the conversation contains its tool result.",
+    "Do not claim a host-side action occurred unless the canonical conversation contains its real tool result.",
     "",
     JSON.stringify(canonicalPayload(prompt), null, 2),
   ].join("\n");
@@ -358,125 +363,14 @@ function canonicalTextPrompt(prompt: ExtractedPrompt): string {
   ].join("\n");
 }
 
-function outputSchema(prompt: ExtractedPrompt): JsonObject {
-  const toolNames = prompt.tools.map((tool) => tool.name);
-  const nameSchema: JsonObject = toolNames.length
-    ? { type: "string", enum: toolNames }
-    : { type: "string" };
+const DEFERRED_TOOL_RESULT =
+  "jsx-ai accepted this native tool request for host execution after the current Codex turn. The real tool result will arrive in the next canonical message. Do not retry this call or make dependent calls in this turn.";
 
+function failedDynamicToolResult(message: string) {
   return {
-    type: "object",
-    properties: {
-      text: { type: "string" },
-      toolCalls: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            name: nameSchema,
-            arguments_json: {
-              type: "string",
-              description:
-                "JSON-encoded object containing the arguments for this tool call",
-            },
-          },
-          required: ["name", "arguments_json"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["text", "toolCalls"],
-    additionalProperties: false,
+    success: false,
+    contentItems: [{ type: "inputText" as const, text: message }],
   };
-}
-
-function parseStructuredCall(value: string): CodexStructuredCall {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (cause) {
-    throw new JsxAiError(
-      "INVALID_RESPONSE",
-      "Codex runtime returned invalid structured JSON",
-      { cause },
-    );
-  }
-  if (
-    !isRecord(parsed) ||
-    typeof parsed.text !== "string" ||
-    !Array.isArray(parsed.toolCalls)
-  ) {
-    throw new JsxAiError(
-      "INVALID_RESPONSE",
-      "Codex runtime response must contain text and toolCalls",
-    );
-  }
-
-  const toolCalls: CodexStructuredCall["toolCalls"] = parsed.toolCalls.map(
-    (entry, index) => {
-      if (!isRecord(entry) || typeof entry.name !== "string") {
-        throw new JsxAiError(
-          "INVALID_RESPONSE",
-          `Codex runtime toolCalls[${index}] is malformed`,
-        );
-      }
-
-      // New contract: arguments are already structured JSON, so strings inside
-      // tool arguments cross exactly one JSON escaping boundary.
-      if (isRecord(entry.arguments)) {
-        return { name: entry.name, args: entry.arguments as JsonObject };
-      }
-
-      // Defensive compatibility with final responses generated by older jsx-ai
-      // Codex contracts. This branch can be removed after the transition window.
-      if (typeof entry.arguments_json === "string") {
-        let legacy: unknown;
-        try {
-          legacy = JSON.parse(entry.arguments_json);
-        } catch (cause) {
-          throw new JsxAiError(
-            "INVALID_RESPONSE",
-            `Codex runtime toolCalls[${index}].arguments_json is not valid JSON`,
-            { cause },
-          );
-        }
-        if (isRecord(legacy)) {
-          return { name: entry.name, args: legacy as JsonObject };
-        }
-      }
-
-      throw new JsxAiError(
-        "INVALID_RESPONSE",
-        `Codex runtime toolCalls[${index}] must contain an arguments object`,
-      );
-    },
-  );
-  return { text: parsed.text, toolCalls };
-}
-
-function normalizedToolCalls(
-  prompt: ExtractedPrompt,
-  structured: CodexStructuredCall,
-  threadId: string,
-  turn: number,
-): ToolCall[] {
-  const declared = new Set(prompt.tools.map((tool) => tool.name));
-  return structured.toolCalls.map((call, index) => {
-    if (!declared.has(call.name)) {
-      throw new JsxAiError(
-        "INVALID_RESPONSE",
-        `Codex runtime requested undeclared tool ${JSON.stringify(call.name)}`,
-      );
-    }
-    return normalizeToolCall(
-      {
-        name: call.name,
-        args: call.args,
-      },
-      `codex_${threadId}_${turn}_${index}_${call.name}`,
-      `Codex runtime toolCalls[${index}]`,
-    );
-  });
 }
 
 function usageFromCodex(usage?: CodexAppServerUsage): LLMResponse["usage"] {
@@ -501,83 +395,137 @@ export async function callCodexRuntime(
     runtimeContext,
     model,
     options,
+    prompt,
   );
   try {
-    let bridge = bridgeInput(session, prompt);
-
-    if (bridge.mode === "resync") {
-      // Append-only canonical history is required for safe delta turns. If a
-      // caller rewrites history inside one run, start a fresh native thread
-      // rather than duplicating an old conversation into the existing one.
-      await restartCodexThread(session, model, options);
+    let bridge: CodexBridgeInput;
+    if (session.requiresResync) {
+      // Native dynamic-tool requests are acknowledged only so Codex can end the
+      // current turn; the host executes them after callLLM returns. Start the
+      // next canonical step on a clean native thread so the temporary handoff
+      // acknowledgment is never mistaken for the real tool result.
+      await restartCodexThread(session, model, options, prompt);
       bridge = {
         mode: "resync",
         text: canonicalPromptText(prompt),
         messagesSent: prompt.messages.length,
         attachments: messageAttachments(prompt.messages),
       };
+    } else {
+      bridge = bridgeInput(session, prompt);
+      if (bridge.mode === "resync") {
+        // Append-only canonical history is required for safe delta turns. If a
+        // caller rewrites history inside one run, start a fresh native thread.
+        await restartCodexThread(session, model, options, prompt);
+        bridge = {
+          mode: "resync",
+          text: canonicalPromptText(prompt),
+          messagesSent: prompt.messages.length,
+          attachments: messageAttachments(prompt.messages),
+        };
+      }
     }
 
-    const schema = outputSchema(prompt);
     const turnNumber = session.turn + 1;
-    const deltaDecoder = new StructuredAgentDeltaDecoder();
-    const wantsStructuredProgress = Boolean(
-      runtimeContext?.onTextDelta || runtimeContext?.onToolProgress,
-    );
+    const declared = new Set(prompt.tools.map((tool) => tool.name));
+    const toolCalls: ToolCall[] = [];
+    const callsById = new Map<string, ToolCall>();
+
+    const onDynamicToolCall = async (call: CodexDynamicToolCall) => {
+      if (call.threadId !== session.thread.id) {
+        return failedDynamicToolResult(
+          `Dynamic tool call belongs to unexpected thread ${JSON.stringify(call.threadId)}`,
+        );
+      }
+      if (!declared.has(call.tool)) {
+        return failedDynamicToolResult(
+          `Codex requested undeclared application tool ${JSON.stringify(call.tool)}`,
+        );
+      }
+      if (!isRecord(call.arguments)) {
+        return failedDynamicToolResult(
+          `Codex dynamic tool ${JSON.stringify(call.tool)} arguments must be a JSON object`,
+        );
+      }
+
+      const existing = callsById.get(call.callId);
+      if (existing) {
+        return {
+          success: true,
+          contentItems: [
+            { type: "inputText" as const, text: DEFERRED_TOOL_RESULT },
+          ],
+        };
+      }
+
+      const normalized = normalizeToolCall(
+        {
+          id: call.callId,
+          name: call.tool,
+          args: call.arguments as JsonObject,
+        },
+        call.callId,
+        `Codex native dynamic tool ${JSON.stringify(call.tool)}`,
+      );
+      const index = toolCalls.length;
+      toolCalls.push(normalized);
+      callsById.set(call.callId, normalized);
+
+      await runtimeContext?.onToolProgress?.({
+        type: "tool_detected",
+        index,
+        name: normalized.name,
+      });
+      for (const [field, value] of Object.entries(normalized.args)) {
+        await runtimeContext?.onToolProgress?.({
+          type: "field_ready",
+          index,
+          name: normalized.name,
+          path: [field],
+          value,
+        });
+      }
+
+      return {
+        success: true,
+        contentItems: [
+          { type: "inputText" as const, text: DEFERRED_TOOL_RESULT },
+        ],
+      };
+    };
+
     const turn = await session.thread.run(codexTurnInput(bridge, options), {
       ...options,
-      outputSchema: schema,
       onProgress: runtimeContext?.onProgress,
-      onTextDelta: wantsStructuredProgress
-        ? async (rawDelta) => {
-            const decoded = deltaDecoder.push(rawDelta);
-            if (decoded.textDelta)
-              await runtimeContext?.onTextDelta?.(decoded.textDelta);
-            for (const progress of decoded.toolProgress) {
-              await runtimeContext?.onToolProgress?.(progress);
-            }
-          }
-        : undefined,
+      onTextDelta: runtimeContext?.onTextDelta,
+      ...(prompt.tools.length ? { onDynamicToolCall } : {}),
     });
-    const structured = parseStructuredCall(turn.finalResponse);
 
-    // Some Codex builds may expose only item/completed for structured turns.
-    // In that case, still honor the agent text callback once at turn completion.
-    if (runtimeContext?.onTextDelta && !deltaDecoder.text && structured.text) {
-      await runtimeContext.onTextDelta(structured.text);
-    } else if (
-      runtimeContext?.onTextDelta &&
-      structured.text.startsWith(deltaDecoder.text) &&
-      structured.text.length > deltaDecoder.text.length
-    ) {
-      await runtimeContext.onTextDelta(
-        structured.text.slice(deltaDecoder.text.length),
-      );
-    }
-    const toolCalls = normalizedToolCalls(
-      prompt,
-      structured,
-      session.thread.id,
-      turnNumber,
-    );
+    // Once a native tool was requested, any post-acknowledgment prose belongs to
+    // the adapter handoff rather than the canonical assistant/tool-call message.
+    const text = toolCalls.length ? "" : turn.finalResponse;
 
     session.turn = turnNumber;
     session.syncedMessages = prompt.messages;
     session.contractKey = promptContractKey(prompt);
-    session.lastResponse = { text: structured.text, toolCalls };
+    session.lastResponse = { text, toolCalls };
+    session.requiresResync = toolCalls.length > 0;
 
+    const dynamicTools = prompt.tools.map(dynamicToolForCodex);
     return {
-      text: structured.text,
+      text,
       toolCalls,
       raw: {
         runtime: "codex",
         transport: "app-server",
+        nativeTools: true,
         threadId: session.thread.id,
         threadTurn: turnNumber,
         bridgeMode: bridge.mode,
         bridgePromptChars: bridge.text.length,
         bridgeMessagesSent: bridge.messagesSent,
         bridgeAttachmentsSent: bridge.attachments.length,
+        nativeToolCalls: toolCalls,
         items: turn.items,
         usage: turn.usage ?? null,
         finalResponse: turn.finalResponse,
@@ -588,6 +536,7 @@ export async function callCodexRuntime(
         body: {
           runtime: "codex",
           transport: "app-server",
+          nativeTools: true,
           ...(model ? { model } : {}),
           threadId: session.thread.id,
           threadTurn: turnNumber,
@@ -598,7 +547,7 @@ export async function callCodexRuntime(
           bridgeAttachmentsSent: bridge.attachments.length,
           bridgeAttachmentsTotal: messageAttachments(prompt.messages).length,
           prompt: bridge.text,
-          outputSchema: schema,
+          dynamicTools,
         },
         prepared: {
           system: prompt.system,
@@ -608,7 +557,7 @@ export async function callCodexRuntime(
           maxTokens: prompt.maxTokens,
         },
       },
-      finishReason: "completed",
+      finishReason: toolCalls.length ? "tool_calls" : "completed",
       usage: usageFromCodex(turn.usage),
     };
   } finally {
